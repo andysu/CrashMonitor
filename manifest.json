@@ -1,0 +1,112 @@
+﻿{
+    "Package":  "CrashMonitor v2",
+    "BuiltUtc":  "2026-10-12T19:31:01.0593209Z",
+    "Source":  {
+                   "Kind":  "git repository source distribution",
+                   "GitCommit":  null,
+                   "CleanGitRelease":  true
+               },
+    "Validation":  {
+                       "SelfChecksPassed":  43,
+                       "DocumentationAudit":  "PASS",
+                       "WindowsPowerShell51":  "PASS",
+                       "WindowsAcceptanceCommand":  "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\Tests\\Test-Windows.ps1"
+                   },
+    "Files":  [
+                  {
+                      "Path":  "CrashMonitor.ps1",
+                      "Bytes":  6256,
+                      "SHA256":  "6DFB57C4E056C16218EF8CF8426537ED02DE1751A4AAEDFC09A6B86D3EFFEE7C"
+                  },
+                  {
+                      "Path":  "Worker.ps1",
+                      "Bytes":  2976,
+                      "SHA256":  "91798D0E4D1BAB458B61DA92ADB8E89A93936C4DBB109EB9E0E3FBC7C2B65721"
+                  },
+                  {
+                      "Path":  "Install.ps1",
+                      "Bytes":  6294,
+                      "SHA256":  "C58B56DC75725DAA751793FEBA7C3BBA008124BB81D126EE8F4746CAAC4401E7"
+                  },
+                  {
+                      "Path":  "NightlyLogCleanup.ps1",
+                      "Bytes":  348,
+                      "SHA256":  "CAD52ABF9F1243665235B6D01E6BB6FAB9AA157932078DEDF98FBB76BEAEE2BE"
+                  },
+                  {
+                      "Path":  "RegisterNightlyTask.ps1",
+                      "Bytes":  380,
+                      "SHA256":  "D303224F2804D64EAC3808B0AB6468A7973509F15DDFE1525804DD9181EFCF72"
+                  },
+                  {
+                      "Path":  "README.md",
+                      "Bytes":  27197,
+                      "SHA256":  "02D3FECA56012839E96D208F91B83CDB7BE0998FBE57F2BD7767F3DC51904ABA"
+                  },
+                  {
+                      "Path":  "TODO.md",
+                      "Bytes":  4317,
+                      "SHA256":  "04BE26DEF9EFD86823C47A0E5756162AA765117E23FAC47F55598BFBE4FD0B0C"
+                  },
+                  {
+                      "Path":  "Config/defaults-v2.json",
+                      "Bytes":  457,
+                      "SHA256":  "7217D4D86E4E08C2EE2D4B9108A9E5E92FBDB50A252517D559A612699B6BB7B7"
+                  },
+                  {
+                      "Path":  "Config/config.json",
+                      "Bytes":  1858,
+                      "SHA256":  "BDE9FFC6132455C982EAF345478D62E0D69EA3EA612153F39C0520D231A17984"
+                  },
+                  {
+                      "Path":  "Modules/Common.psm1",
+                      "Bytes":  12290,
+                      "SHA256":  "B4EAF84D0B53774A634F48A5CE6ED9A34FB72263C6B892A56D49290B7F17FB44"
+                  },
+                  {
+                      "Path":  "Modules/EventCapture.psm1",
+                      "Bytes":  8191,
+                      "SHA256":  "535C85DDAC1D346D0E562FB043E873D45706B2A4E4DDC1C0E0D9A2A92DF4F473"
+                  },
+                  {
+                      "Path":  "Modules/TelemetryV2.psm1",
+                      "Bytes":  9217,
+                      "SHA256":  "F58ECA84E0EF232C478F6AA3535565CF19E6AC3B3AB43552741F2725815D990F"
+                  },
+                  {
+                      "Path":  "Modules/Diagnostics.psm1",
+                      "Bytes":  10511,
+                      "SHA256":  "916E0DA4893E558C141CC6CA96D4526254B53639E4145D610BB14B7CEAEA55EE"
+                  },
+                  {
+                      "Path":  "Modules/VoltageMonitor.psm1",
+                      "Bytes":  7165,
+                      "SHA256":  "A969C3D6AE51E71A9A660455C18675AB14E4C5771CF5E0B28341654F9BBD385D"
+                  },
+                  {
+                      "Path":  "Scripts/Export-Diagnostics.ps1",
+                      "Bytes":  780,
+                      "SHA256":  "4963DE0F7F28C0BBA3874E83BA187F7517EBB5FCE90240F5640FCD120FF30F50"
+                  },
+                  {
+                      "Path":  "Scripts/Get-MonitorStatus.ps1",
+                      "Bytes":  1191,
+                      "SHA256":  "BE87C53DA24CF80E918F600BD73F0A26F17D94AF563DD847883771C6FF41C8BD"
+                  },
+                  {
+                      "Path":  "Scripts/Stop-Monitor.ps1",
+                      "Bytes":  238,
+                      "SHA256":  "4C7A19E8089525AB8701C254819AB5D8496867D673C0FC7FFFC421F2164F558F"
+                  },
+                  {
+                      "Path":  "Tests/Test-Self.ps1",
+                      "Bytes":  11653,
+                      "SHA256":  "42FA8D15E7DE5201B76ACC8BBAAF096EDA3EBD4350C5CE9F66A6E7F67C70F686"
+                  },
+                  {
+                      "Path":  "Tests/Test-Windows.ps1",
+                      "Bytes":  2102,
+                      "SHA256":  "ED190D1928157F46E8B83FD9D2DE8247D732398F9BE90711810E0AE85F1F0571"
+                  }
+              ]
+}

@@ -1,0 +1,17 @@
+{
+  "SchemaVersion": 2,
+  "SampleIntervalSeconds": 5,
+  "HeartbeatIntervalSeconds": 2,
+  "EventPollSeconds": 5,
+  "EventBackfillHours": 48,
+  "EventBatchSize": 500,
+  "WorkerStallSeconds": 300,
+  "MaxLogSizeMB": 32,
+  "RetentionHours": 4,
+  "MaxEventXmlFiles": 10000,
+  "MinFreeSpaceMB": 512,
+  "MaxIncidents": 100,
+  "MaxEvidenceMB": 512,
+  "EnableHardwareSensors": false,
+  "OptionalEventChannels": ["Microsoft-Windows-WindowsUpdateClient/Operational"]
+}

@@ -1,0 +1,53 @@
+{
+    "RootPath":  "C:\\CrashMonitor",
+    "SchemaVersion":  2,
+    "EnableDriverSnapshots":  true,
+    "RetentionDays":  14,
+    "RetentionHours":  4,
+    "EnablePanicLogging":  true,
+    "DriverIntervalSeconds":  60,
+    "CsvDelimiter":  ";",
+    "MonitoredEventIds":  [
+                              41,
+                              6008,
+                              1000,
+                              1001,
+                              18,
+                              19,
+                              20,
+                              7,
+                              11,
+                              15,
+                              51,
+                              55
+                          ],
+    "EventPollSeconds":  3,
+    "MaxEvidenceMB":  512,
+    "HeartbeatIntervalSeconds":  5,
+    "SmartIntervalSeconds":  300,
+    "EventBackfillHours":  48,
+    "MonitoredProviders":  [
+                               "Microsoft-Windows-Kernel-Power",
+                               "EventLog",
+                               "WHEA-Logger",
+                               "disk",
+                               "ntfs",
+                               "stornvme",
+                               "storport",
+                               "BugCheck",
+                               "Application Error"
+                           ],
+    "EnableSmartMonitoring":  true,
+    "SampleIntervalSeconds":  3,
+    "WorkerStallSeconds":  300,
+    "MaxEventXmlFiles":  10000,
+    "MaxLogSizeMB":  32,
+    "EventBatchSize":  500,
+    "MinFreeSpaceMB":  512,
+    "MaxIncidents":  100,
+    "AutoGenerateCrashReport":  true,
+    "EnableHardwareSensors":  true,
+    "OptionalEventChannels":  [
+                                  "Microsoft-Windows-WindowsUpdateClient/Operational"
+                              ]
+}
