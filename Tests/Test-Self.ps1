@@ -21,7 +21,8 @@ function New-Fixture {
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('crashmonitor-test-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($temp)
 try {
-    $parseFiles=@('CrashMonitor.ps1','Worker.ps1','Install.ps1','NightlyLogCleanup.ps1','RegisterNightlyTask.ps1','Modules/Common.psm1','Modules/EventCapture.psm1','Modules/TelemetryV2.psm1','Modules/Diagnostics.psm1','Modules/VoltageMonitor.psm1','Scripts/Export-Diagnostics.ps1','Scripts/Get-MonitorStatus.ps1','Scripts/Stop-Monitor.ps1','Tests/Test-Self.ps1','Tests/Test-Windows.ps1')
+    $scriptFiles=@(Get-ChildItem (Join-Path $root 'Scripts') -Filter '*.ps1' | ForEach-Object { "Scripts/$($_.Name)" })
+    $parseFiles=@('CrashMonitor.ps1','Worker.ps1','Install.ps1','NightlyLogCleanup.ps1','RegisterNightlyTask.ps1','Modules/Common.psm1','Modules/EventCapture.psm1','Modules/TelemetryV2.psm1','Modules/Diagnostics.psm1','Modules/VoltageMonitor.psm1','Tests/Test-Self.ps1','Tests/Test-Windows.ps1') + $scriptFiles
     foreach ($relative in $parseFiles) {
         $tokens=$null;$errors=$null
         [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $root $relative),[ref]$tokens,[ref]$errors)
@@ -126,6 +127,31 @@ try {
         $before=(Get-FileHash (Join-Path $incident 'report.json')).Hash
         New-CMIncident -Root $temp -Config $cfg -Boot $fixtureBoot -Events @()
         Assert-CM ($before -eq (Get-FileHash (Join-Path $incident 'report.json')).Hash) 'Restarting a monitor in the same boot does not overwrite the incident'
+
+        # Unit tests for Limit-CMCsvLog
+        $trimTestCsv = Join-Path $temp 'trim-test.csv'
+        $nowUtc = [DateTime]::UtcNow
+        $lines = @('"SchemaVersion";"Utc";"Value"')
+        for ($i = 0; $i -lt 200; $i++) {
+            $lines += '"2";"{0}";"{1}"' -f ($nowUtc.AddHours(-5).AddSeconds($i).ToString('o')), $i
+        }
+        for ($i = 200; $i -lt 400; $i++) {
+            $lines += '"2";"{0}";"{1}"' -f ($nowUtc.AddHours(-1).AddSeconds($i).ToString('o')), $i
+        }
+        [IO.File]::WriteAllLines($trimTestCsv, $lines)
+        Limit-CMCsvLog -Path $trimTestCsv -RetentionHours 4 -MinKeepLines 50
+        $afterTrim = @(Import-Csv $trimTestCsv -Delimiter ';')
+        Assert-CM ($afterTrim.Count -eq 200 -and $afterTrim[0].Value -eq '200') 'Limit-CMCsvLog correctly trims rows older than RetentionHours using true UTC'
+
+        $expiredCsv = Join-Path $temp 'expired-test.csv'
+        $expLines = @('"SchemaVersion";"Utc";"Value"')
+        for ($i = 0; $i -lt 500; $i++) {
+            $expLines += '"2";"{0}";"{1}"' -f ($nowUtc.AddHours(-24).AddSeconds($i).ToString('o')), $i
+        }
+        [IO.File]::WriteAllLines($expiredCsv, $expLines)
+        Limit-CMCsvLog -Path $expiredCsv -RetentionHours 4 -MinKeepLines 100
+        $afterExpTrim = @(Import-Csv $expiredCsv -Delimiter ';')
+        Assert-CM ($afterExpTrim.Count -eq 100 -and $afterExpTrim[-1].Value -eq '499') 'Limit-CMCsvLog keeps MinKeepLines when all rows are expired'
     } finally {
         & $diagnostics {
             Set-Item Function:script:Get-CMInventory $script:SavedInventoryFixture

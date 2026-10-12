@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 Import-Module (Join-Path $PSScriptRoot 'Common.psm1')
 
 function Invoke-CMNative {

@@ -1,4 +1,4 @@
-# CrashMonitor v2 — Система глибокого моніторингу та діагностики збоїв Windows Server
+﻿# CrashMonitor v2 — Система глибокого моніторингу та діагностики збоїв Windows Server
 
 CrashMonitor v2 — це автономний комплекс моніторингу типу «чорна скринька літака» (Flight Recorder) для Windows Server 2022. Він розроблений для розслідування раптових самовільних перезавантажень, апаратних скидань (Reset), знеструмлень, зависань накопичувачів та синіх екранів смерті (BSOD / BugCheck).
 
@@ -10,10 +10,11 @@ CrashMonitor v2 — це автономний комплекс монітори�
 1. [Архітектура та принцип роботи](#архітектура-та-принцип-роботи)
 2. [Детальний опис кожного файлу](#детальний-опис-кожного-файлу)
 3. [Метрики та апаратні сенсори (Ring-0)](#метрики-та-апаратні-сенсори-ring-0)
-4. [Ковзне вікно логів та збереження інцидентів](#ковзне-вікно-логів-та-збереження-інцидентів)
-5. [Класифікація перезавантажень](#класифікація-перезавантажень)
-6. [Швидкий старт та щоденні команди](#швидкий-старт-та-щоденні-команди)
-7. [Як покращувати та розширювати проект](#як-покращувати-та-розширювати-проект)
+4. [Безпека та ризики (Security Advisory: WinRing0)](#безпека-та-ризики-security-advisory-winring0)
+5. [Ковзне вікно логів та збереження інцидентів](#ковзне-вікно-логів-та-збереження-інцидентів)
+6. [Класифікація перезавантажень](#класифікація-перезавантажень)
+7. [Швидкий старт та щоденні команди](#швидкий-старт-та-щоденні-команди)
+8. [Як покращувати та розширювати проект](#як-покращувати-та-розширювати-проект)
 
 ---
 
@@ -38,18 +39,18 @@ CrashMonitor v2 — це автономний комплекс монітори�
 1. **Супервізор (`CrashMonitor.ps1`)**:
    - Запускається при старті ОС (Boot Trigger) ще до входу користувача.
    - Генерує унікальний ідентифікатор сесії завантаження (`BootKey`) та ідентифікатор запуску (`MonitorSessionId`).
-   - Веде незалежний високопріоритетний пульс системи ([`heartbeat-v2.csv`](file:///C:/CrashMonitor/Evidence/Logs/heartbeat-v2.csv)). Якщо вся система чи диски зависнуть — за перерваним пульсом визначається точна секунда смерті ОС.
+   - Веде незалежний високопріоритетний пульс системи ([`heartbeat-v2.csv`](Evidence/Logs/heartbeat-v2.csv)). Якщо вся система чи диски зависнуть — за перерваним пульсом визначається точна секунда смерті ОС.
    - Контролює воркерів: якщо будь-який збирач завис або завершився через помилку WMI/CIM, супервізор автоматично перезапускає його без зупинки моніторингу.
 2. **Збирач телеметрії (`Worker.ps1 -Role telemetry`)**:
    - Опитує лічильники ОС кожні 3 секунди з жорсткими таймаутами (4 секунди), щоб збій підсистеми не заблокував збір.
    - Зчитує апаратні напруги, температури, струми й вентилятори через бібліотеку ядра.
    - Робить запис проби дискової затримки (`io-probe.tmp`), фіксуючи мікрозависання контролера SSD/HDD перед падінням.
-   - Зберігає повний зріз усіх процесів ОС (PID, RAM, CPU, дескриптори) у [`processes-latest.json`](file:///C:/CrashMonitor/Evidence/Logs/processes-latest.json).
+   - Зберігає повний зріз усіх процесів ОС (PID, RAM, CPU, дескриптори) у [`processes-latest.json`](Evidence/Logs/processes-latest.json).
 3. **Збирач подій та інцидентів (`Worker.ps1 -Role events`)**:
    - Читає події Windows (`System`, `Application`, `WHEA-Logger`, `BugCheck`, `Kernel-Power`).
    - Зберігає повні необрізані XML подій та бінарні `WHEA RawData`.
-   - При старті після збою класифікує причину рестарту і формує повний ізольований пакет інциденту в [`Evidence/Incidents/<BootKey>`](file:///C:/CrashMonitor/Evidence/Incidents).
-   - Щойно відбулася хвилина роботи — викликає ротацію й обрізання старих логів.
+   - При старті після збою класифікує причину рестарту і формує повний ізольований пакет інциденту в [`Evidence/Incidents/<BootKey>`](Evidence/Incidents).
+   - Щойно відбулася хвилина роботи — викликає ротацію й ковзне обрізання старих логів.
 4. **Міжпроцесна синхронізація (`Invoke-CMFileLock`)**:
    - Усі операції запису та ротації використовують глобальні іменовані м'ютекси Windows (`Global\CMFile_<hash>`). Конфлікти блокування файлів між супервізором і збирачами виключені.
 
@@ -58,61 +59,61 @@ CrashMonitor v2 — це автономний комплекс монітори�
 ## Детальний опис кожного файлу
 
 ### 1. Кореневі виконавчі файли
-- [`CrashMonitor.ps1`](file:///C:/CrashMonitor/CrashMonitor.ps1) — **Головний супервізор**. Перевіряє єдиний екземпляр процесу, реєструє сесію завантаження, запускає фонових воркерів, безперервно пише `heartbeat-v2.csv` та стежить за станом збирачів.
-- [`Worker.ps1`](file:///C:/CrashMonitor/Worker.ps1) — **Універсальний воркер**. Запускається параметризовано: `-Role telemetry` або `-Role events`. Реалізує цикл збору, контроль вільного місця на диску та оновлення стану прогресу.
-- [`Install.ps1`](file:///C:/CrashMonitor/Install.ps1) — **Скрипт інсталяції та оновлення**. Створює системну задачу в Планувальнику завдань (`CrashMonitor_AutoStart`), налаштовує параметри аварійних дампів пам'яті (опціонально `-EnableCrashDumps`) і робить резервні копії перед зміною файлів.
-- [`NightlyLogCleanup.ps1`](file:///C:/CrashMonitor/NightlyLogCleanup.ps1) та [`RegisterNightlyTask.ps1`](file:///C:/CrashMonitor/RegisterNightlyTask.ps1) — сумісні заглушки старого нічного планувальника v1 (деактивовані, оскільки v2 виконує розумне ковзне очищення автоматично щохвилини).
+- [`CrashMonitor.ps1`](CrashMonitor.ps1) — **Головний супервізор**. Перевіряє єдиний екземпляр процесу, реєструє сесію завантаження, запускає фонових воркерів, безперервно пише `heartbeat-v2.csv` та стежить за станом збирачів.
+- [`Worker.ps1`](Worker.ps1) — **Універсальний воркер**. Запускається параметризовано: `-Role telemetry` або `-Role events`. Реалізує цикл збору, контроль вільного місця на диску та оновлення стану прогресу.
+- [`Install.ps1`](Install.ps1) — **Скрипт інсталяції та оновлення**. Створює системну задачу в Планувальнику завдань (`CrashMonitor_AutoStart`), налаштовує параметри аварійних дампів пам'яті (опціонально `-EnableCrashDumps`) і робить резервні копії перед зміною файлів.
+- [`NightlyLogCleanup.ps1`](NightlyLogCleanup.ps1) та [`RegisterNightlyTask.ps1`](RegisterNightlyTask.ps1) — сумісні заглушки старого нічного планувальника v1 (деактивовані, оскільки v2 виконує розумне ковзне очищення автоматично щохвилини).
 
 ---
 
 ### 2. Модулі ядра (`Modules/`)
-- [`Common.psm1`](file:///C:/CrashMonitor/Modules/Common.psm1) — **Базова бібліотека спільних функцій**:
+- [`Common.psm1`](Modules/Common.psm1) — **Базова бібліотека спільних функцій**:
   - `Write-CMCsv`: потоковий запис CSV з обов'язковим екрануванням лапок, invariant крапкою в десяткових числах та перевіркою схеми заголовків.
   - `Invoke-CMFileLock`: міжпроцесне блокування на базі системних м'ютексів.
-  - `Get-CMBootKey`: обчислення стійкого унікального хешу поточного завантаження ОС.
-  - `Get-CMCrashClassification`: евристичний аналізатор подій для визначення типу перезавантаження (`Bugcheck`, `UnexpectedReset`, `RequestedRestart`, `Unknown`).
+  - `Get-CMBootInfo`: зчитування контексту завантаження ОС (`BootKey`, час старту).
+  - `Get-CMRestartClassification`: евристичний аналізатор подій для визначення типу перезавантаження (`Bugcheck`, `UnexpectedReset`, `RequestedRestart`, `Unknown`).
   - `Invoke-CMRotation`: серце ротації — перевіряє ліміти розміру та викликає очищення.
   - `Limit-CMCsvLog` та `Limit-CMTextLog`: функції ковзного часового зрізу — тримають у файлах CSV лише свіжі записи за останні `RetentionHours` (4 години), відкидаючи старі рядки без зупинки запису.
-- [`TelemetryV2.psm1`](file:///C:/CrashMonitor/Modules/TelemetryV2.psm1) — **Збирач продуктивності**:
+- [`TelemetryV2.psm1`](Modules/TelemetryV2.psm1) — **Збирач продуктивності**:
   - Опитує WMI/CIM класи: `Win32_PerfFormattedData_PerfOS_Processor`, `Win32_OperatingSystem`, `Win32_PerfFormattedData_PerfOS_Memory`, `Win32_PerfFormattedData_PerfDisk_PhysicalDisk`.
   - Здійснює Storage I/O Probe (`io-probe.tmp` із примусовим `Flush`) для виявлення підвисань дискового контролера.
   - Збирає повний зріз процесів ОС та викликає `VoltageMonitor.psm1`.
-  - Записує виділений лог температур [`temperatures.csv`](file:///C:/CrashMonitor/Evidence/Logs/temperatures.csv) та формує аварійні тривоги при нагріванні >= 70°C.
-- [`VoltageMonitor.psm1`](file:///C:/CrashMonitor/Modules/VoltageMonitor.psm1) — **Модуль низькорівневих апаратних сенсорів (Ring-0)**:
+  - Записує виділений лог температур [`temperatures.csv`](Evidence/Logs/temperatures.csv) та формує аварійні тривоги при нагріванні >= 70°C.
+- [`VoltageMonitor.psm1`](Modules/VoltageMonitor.psm1) — **Модуль низькорівневих апаратних сенсорів (Ring-0)**:
   - Динамічно завантажує C#-інтерфейс до бібліотеки `LibreHardwareMonitorLib.dll`.
   - Опитує Super I/O мікросхему материнської плати (Nuvoton) та MSR-регістри процесора Intel Core i5.
   - Повертає напруги ліній БЖ (`Vcore`, `+3.3V`, `AVCC`, `3VSB`, `VBat`, `VTT`), оберти вентиляторів, температури окремих ядер та енергоспоживання процесора у ватах.
-- [`EventCapture.psm1`](file:///C:/CrashMonitor/Modules/EventCapture.psm1) — **Збирач журналів подій**:
+- [`EventCapture.psm1`](Modules/EventCapture.psm1) — **Збирач журналів подій**:
   - Зчитує канали подій `System`, `Application` та специфічні провайдери.
   - Підтримує курсори читання (`cursor-*.json`) для збереження позиції між перезапусками монітора.
   - Зберігає повні оригінальні XML подій (включно з необрізаними бінарними `RawData` для апаратних помилок WHEA).
-- [`Diagnostics.psm1`](file:///C:/CrashMonitor/Modules/Diagnostics.psm1) — **Пакетувальник інцидентів та звітів**:
+- [`Diagnostics.psm1`](Modules/Diagnostics.psm1) — **Пакетувальник інцидентів та звітів**:
   - `New-CMIncident`: генерує детальний автономний інцидент при виявленні перезапуску: експортує EVTX, збирає знімок конфігурації заліза (`inventory.json`), записує хвіст телеметрії (300 точок до збою) та виносить фінальний вердикт.
   - `Export-CMDiagnostics`: упаковує всі матеріали розслідування в єдиний ZIP-архів із SHA-256 маніфестом цілісності.
 
 ---
 
 ### 3. Скрипти діагностики та перевірки (`Scripts/`)
-- [`Watch-LiveSensors.ps1`](file:///C:/CrashMonitor/Scripts/Watch-LiveSensors.ps1) — консольний монітор реального часу. В одному рядку виводить навантаження процесора, його температуру на кристалі, енергоспоживання (W), напругу `Vcore`, оберти кулера (RPM), оперативну пам'ять, температури NVMe SSD (NAND і контролер), температуру HDD та статус тестів.
-- [`Get-MonitorStatus.ps1`](file:///C:/CrashMonitor/Scripts/Get-MonitorStatus.ps1) — швидка перевірка працездатності: показує PID супервізора, стан воркерів (Waiting/Collecting), послідовність heartbeat та повертає `PASS`/`FAIL`.
-- [`Stop-Monitor.ps1`](file:///C:/CrashMonitor/Scripts/Stop-Monitor.ps1) — безпечна та штатна зупинка монітора через запит `stop.request` без ризику пошкодження відкритих файлів.
-- [`Export-Diagnostics.ps1`](file:///C:/CrashMonitor/Scripts/Export-Diagnostics.ps1) — створює діагностичний ZIP-пакет у папці `Exports/` для передачі на аналіз фахівцям.
-- [`Invoke-SystemStressTest.ps1`](file:///C:/CrashMonitor/Scripts/Invoke-SystemStressTest.ps1) — комплексний сценарій стрес-тестування системи (диски + пам'ять + CPU) для провокації збою під контролем CrashMonitor.
-- [`Watch-DiskStress.ps1`](file:///C:/CrashMonitor/Scripts/Watch-DiskStress.ps1) — утиліта відстеження дискового навантаження під час стрес-тестів.
-- [`Get-OcctStatus.ps1`](file:///C:/CrashMonitor/Scripts/Get-OcctStatus.ps1) та [`Get-PostTestReport.ps1`](file:///C:/CrashMonitor/Scripts/Get-PostTestReport.ps1) — скрипти для перевірки стану сторонніх стрес-тестів (наприклад, OCCT) та формування післятестового звіту.
-- [`Clear-MemoryStandby.ps1`](file:///C:/CrashMonitor/Scripts/Clear-MemoryStandby.ps1) та [`Test-MemoryStress.ps1`](file:///C:/CrashMonitor/Scripts/Test-MemoryStress.ps1) — утиліти для роботи зі standby-пам'яттю через RAMMap та перевірки стабільності RAM.
+- [`Watch-LiveSensors.ps1`](Scripts/Watch-LiveSensors.ps1) — консольний монітор реального часу. В одному рядку виводить навантаження процесора, його температуру на кристалі, енергоспоживання (W), напругу `Vcore`, оберти кулера (RPM), оперативну пам'ять, температури NVMe SSD (NAND і контролер), температуру HDD та статус тестів.
+- [`Get-MonitorStatus.ps1`](Scripts/Get-MonitorStatus.ps1) — швидка перевірка працездатності: показує PID супервізора, стан воркерів (Waiting/Collecting), послідовність heartbeat та повертає `PASS`/`FAIL`.
+- [`Stop-Monitor.ps1`](Scripts/Stop-Monitor.ps1) — безпечна та штатна зупинка монітора через запит `stop.request` без ризику пошкодження відкритих файлів.
+- [`Export-Diagnostics.ps1`](Scripts/Export-Diagnostics.ps1) — створює діагностичний ZIP-пакет у папці `Exports/` для передачі на аналіз фахівцям.
+- [`Invoke-SystemStressTest.ps1`](Scripts/Invoke-SystemStressTest.ps1) — комплексний сценарій стрес-тестування системи (диски + пам'ять + CPU) для провокації збою під контролем CrashMonitor.
+- [`Watch-DiskStress.ps1`](Scripts/Watch-DiskStress.ps1) — утиліта відстеження дискового навантаження під час стрес-тестів.
+- [`Get-OcctStatus.ps1`](Scripts/Get-OcctStatus.ps1) та [`Get-PostTestReport.ps1`](Scripts/Get-PostTestReport.ps1) — скрипти для перевірки стану сторонніх стрес-тестів (наприклад, OCCT) та формування післятестового звіту.
+- [`Clear-MemoryStandby.ps1`](Scripts/Clear-MemoryStandby.ps1) та [`Test-MemoryStress.ps1`](Scripts/Test-MemoryStress.ps1) — утиліти для роботи зі standby-пам'яттю через RAMMap та перевірки стабільності RAM.
 
 ---
 
 ### 4. Автоматизоване тестування (`Tests/`)
-- [`Test-Self.ps1`](file:///C:/CrashMonitor/Tests/Test-Self.ps1) — **43 вбудовані модульні самотести**. Перевіряють синтаксис усіх скриптів, коректність парсингу XML/WHEA, класифікацію BugCheck, механізми ротації, блокування файлів та цілісність CSV. Не потребує зовнішніх залежностей.
-- [`Test-Windows.ps1`](file:///C:/CrashMonitor/Tests/Test-Windows.ps1) — димовий тест сумісності в середовищі Windows: перевіряє права, статус Scheduled Task, доступність каналів журналів подій та WMI.
+- [`Test-Self.ps1`](Tests/Test-Self.ps1) — **52 вбудовані модульні самотести**. Перевіряють синтаксис усіх скриптів у проекті, парсинг XML/WHEA, класифікацію BugCheck, механізми ротації, блокування файлів, цілісність CSV та логіку ковзного вікна `Limit-CMCsvLog`. Не потребує зовнішніх залежностей.
+- [`Test-Windows.ps1`](Tests/Test-Windows.ps1) — димовий тест сумісності в середовищі Windows: перевіряє права, статус Scheduled Task, доступність каналів журналів подій та WMI.
 
 ---
 
 ### 5. Конфігурація (`Config/`)
-- [`Config/config.json`](file:///C:/CrashMonitor/Config/config.json) — діюча конфігурація монітора.
-- [`Config/defaults-v2.json`](file:///C:/CrashMonitor/Config/defaults-v2.json) — шаблон типових налаштувань.
+- [`Config/config.json`](Config/config.json) — діюча конфігурація монітора.
+- [`Config/defaults-v2.json`](Config/defaults-v2.json) — шаблон типових налаштувань.
 
 ---
 
@@ -135,7 +136,7 @@ CrashMonitor v2 — це автономний комплекс монітори�
 CrashMonitor зчитує понад 40 апаратних метрик. Частина з них (диски, ОС, мережа) доступні через стандартні API Windows, але низькорівневі напруги БЖ та прямі температури ядер вимагають виконання процесорних інструкцій `rdmsr` та `in/out`, що заборонено у звичайному просторі додатків (Ring-3).
 
 ### Як реалізовано доступ до Ring-0:
-1. Використовується бібліотека [`Tools/LibreHardwareMonitor/LibreHardwareMonitorLib.dll`](file:///C:/CrashMonitor/Tools/LibreHardwareMonitor).
+1. Використовується бібліотека [`Tools/LibreHardwareMonitor/LibreHardwareMonitorLib.dll`](Tools/LibreHardwareMonitor/LibreHardwareMonitorLib.dll).
 2. Бібліотека завантажує драйвер режиму ядра `WinRing0`.
 3. Оскільки Microsoft Defender за замовчуванням блокує цей драйвер як застарілий за правилом вразливих драйверів (**`VulnerableDriver:WinNT/Winring0`**, Threat ID `2147937641`), у Defender було внесено цільовий дозвіл саме для цього ідентифікатора загрози:
    ```powershell
@@ -164,20 +165,34 @@ CrashMonitor зчитує понад 40 апаратних метрик. Час�
 
 ---
 
+## Безпека та ризики (Security Advisory: WinRing0)
+
+> [!WARNING]
+> Драйвер `WinRing0`, який використовується цією збіркою LibreHardwareMonitor, має публічно задокументовану вразливість **CVE-2020-14979** (Local Privilege Escalation). Через відкритий інтерфейс драйвера локальний зловмисник без адміністративних прав може прочитати або змінити фізичну пам'ять ядра.
+
+- **Чому це заблоковано типово:** Microsoft Defender блокує драйвер через сигнатуру `VulnerableDriver:WinNT/Winring0` у списку блокування вразливих драйверів (Vulnerable Driver Blocklist).
+- **Коли це безпечно:** На виділеному сервері або стенді, де до системи мають доступ виключно адміністратори (немає сторонніх локальних облікових записів або сервісів з низькими привілеями), увімкнення цього драйвера є контрольованим компромісом для отримання критичної телеметрії напруг БЖ.
+- **Альтернатива без ризику:** Якщо корпоративні політики забороняють винятки Defender:
+  1. Можна вимкнути апаратні сенсори: `"EnableHardwareSensors": false` у [`Config/config.json`](Config/config.json).
+  2. Використовувати безпечний штатний датчик ACPI через Windows WMI (`MSAcpi_ThermalZoneTemperature`), який працює на рівні системи без сторонніх драйверів ядра.
+
+---
+
 ## Ковзне вікно логів та збереження інцидентів
 
 Для розслідування раптових перезавантажень не потрібні гігабайти рутинних логів за попередні тижні — критично важлива **детальна передісторія за останні кілька годин безпосередньо перед моментом збою**.
 
 ### Механізм ковзного вікна (`RetentionHours = 4`):
-1. У [`Config/config.json`](file:///C:/CrashMonitor/Config/config.json) встановлено параметр `"RetentionHours": 4`.
+1. У [`Config/config.json`](Config/config.json) встановлено параметр `"RetentionHours": 4`.
 2. Щохвилини воркер подій викликає функцію `Invoke-CMRotation`.
-3. Функція `Limit-CMCsvLog` аналізує стовпець `Utc` у потокових CSV-файлах (`telemetry-v2.csv`, `temperatures.csv`, `heartbeat-v2.csv`).
+3. Функція `Limit-CMCsvLog` аналізує стовпець `Utc` у потокових CSV-файлах (`telemetry-v2.csv`, `temperatures.csv`, `heartbeat-v2.csv`) із точним приведенням до шкали UTC (`DateTimeOffset`).
 4. Усі рядки, старіші за `(UtcNow - 4 години)`, потоково відкидаються.
-5. Файли завжди містять останні ~4800 точок вимірювання (за 4 години), не розростаються понад розумні межі (тримаються в межах 20–30 МБ) і моментально відкриваються для аналізу.
+5. Якщо сервер був тривалий час вимкнений і всі рядки в лозі застарілі, функція гарантовано зберігає останні 300 рядків як опорну точку.
+6. Файли завжди містять останні ~4800 точок вимірювання (за 4 години), не розростаються понад розумні межі (тримаються в межах 20–30 МБ) і моментально відкриваються для аналізу.
 
 ### Недоторканність аварійних інцидентів:
 Коли на сервері стається аварійне вимкнення, перезапуск або синій екран:
-- Створюється окрема постійна папка в [`Evidence/Incidents/<BootKey>`](file:///C:/CrashMonitor/Evidence/Incidents).
+- Створюється окрема постійна папка в [`Evidence/Incidents/<BootKey>`](Evidence/Incidents).
 - У неї назавжди зберігаються: повні логи подій навколо збою, EVTX, дампи WHEA, знімок конфігурації та **300 рядків телеметрії прямо перед моментом смерті ОС**.
 - Ротація ковзного вікна **ніколи не видаляє** папки інцидентів (вони зберігаються до ліміту `MaxIncidents: 100`).
 
@@ -202,30 +217,30 @@ CrashMonitor зчитує понад 40 апаратних метрик. Час�
 
 ### 1. Перевірити живий стан сенсорів прямо зараз:
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\CrashMonitor\Scripts\Watch-LiveSensors.ps1
+powershell -ExecutionPolicy Bypass -File .\Scripts\Watch-LiveSensors.ps1
 ```
 *(Для безперервного спостереження кожні 3 секунди: додайте `-Samples 100`)*
 
 ### 2. Перевірити статус служби CrashMonitor:
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\CrashMonitor\Scripts\Get-MonitorStatus.ps1
+powershell -ExecutionPolicy Bypass -File .\Scripts\Get-MonitorStatus.ps1
 ```
 
 ### 3. Запустити вбудовані тести самоперевірки:
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\CrashMonitor\Tests\Test-Self.ps1
+powershell -ExecutionPolicy Bypass -File .\Tests\Test-Self.ps1
 ```
 
 ### 4. Зібрати повний діагностичний ZIP-пакет для аналізу:
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\CrashMonitor\Scripts\Export-Diagnostics.ps1
+powershell -ExecutionPolicy Bypass -File .\Scripts\Export-Diagnostics.ps1
 ```
-*(Готовий архів буде збережено в каталозі `C:\CrashMonitor\Exports\`)*
+*(Готовий архів буде збережено в каталозі `Exports/`)*
 
 ### 5. Зупинити або перезапустити моніторинг:
 ```powershell
 # Штатна зупинка:
-powershell -ExecutionPolicy Bypass -File C:\CrashMonitor\Scripts\Stop-Monitor.ps1
+powershell -ExecutionPolicy Bypass -File .\Scripts\Stop-Monitor.ps1
 
 # Запуск через планувальник:
 Start-ScheduledTask -TaskName "CrashMonitor_AutoStart"
@@ -238,16 +253,16 @@ Start-ScheduledTask -TaskName "CrashMonitor_AutoStart"
 Якщо ви хочете доопрацювати CrashMonitor:
 
 1. **Додавання нових апаратних датчиків**:
-   - Відкрийте [`Modules/VoltageMonitor.psm1`](file:///C:/CrashMonitor/Modules/VoltageMonitor.psm1).
+   - Відкрийте [`Modules/VoltageMonitor.psm1`](Modules/VoltageMonitor.psm1).
    - У методі `ReadAllSensors()` словник `dict` містить усі доступні сенсори LibreHardwareMonitor.
    - Щоб додати новий параметр (наприклад, окремі напруги 12V/5V або температури додаткових дисків), додайте відповідні ключі в хеш-таблицю `$snapshot` у функції `Get-CrashMonitorVoltageSnapshot`.
 2. **Зміна часу зберігання логів**:
-   - У файлі [`Config/config.json`](file:///C:/CrashMonitor/Config/config.json) змініть значення `"RetentionHours"`. Наприклад, `"RetentionHours": 8` зберігатиме історію за останні 8 годин.
+   - У файлі [`Config/config.json`](Config/config.json) змініть значення `"RetentionHours"`. Наприклад, `"RetentionHours": 8` зберігатиме історію за останні 8 годин.
 3. **Додавання нових каналів Windows Event Log**:
-   - У файлі [`Config/config.json`](file:///C:/CrashMonitor/Config/config.json) у масив `"OptionalEventChannels"` додайте потрібний журнал (наприклад, `"Microsoft-Windows-Storage-Storport/Operational"`).
+   - У файлі [`Config/config.json`](Config/config.json) у масив `"OptionalEventChannels"` додайте потрібний журнал (наприклад, `"Microsoft-Windows-Storage-Storport/Operational"`).
 4. **Перевірка після змін**:
    - Після будь-якої модифікації коду обов'язково виконайте:
      ```powershell
-     powershell -ExecutionPolicy Bypass -File C:\CrashMonitor\Tests\Test-Self.ps1
+     powershell -ExecutionPolicy Bypass -File .\Tests\Test-Self.ps1
      ```
    - Тест перевіряє сумісність синтаксису, роботу блокувань, парсерів та експорту і захищає від внесення регресійних помилок.

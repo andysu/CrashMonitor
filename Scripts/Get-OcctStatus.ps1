@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 $os = Get-CimInstance Win32_OperatingSystem
 $bootStr = $os.LastBootUpTime.ToString('yyyy-MM-dd HH:mm:ss')
 $occtProcs = @(Get-Process -Name '*occt*' -ErrorAction SilentlyContinue)

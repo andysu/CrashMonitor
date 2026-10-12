@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][ValidateSet('events','telemetry')][string]$Role, [Parameter(Mandatory=$true)][string]$RootPath)
 $ErrorActionPreference='Stop'

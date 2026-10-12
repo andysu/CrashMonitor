@@ -1,4 +1,4 @@
-# =====================================================================
+﻿# =====================================================================
 # CrashMonitor Module: VoltageMonitor.psm1
 # Hardware Voltage (+12V, +5V, +3.3V, Vcore, Vbat) & Power Telemetry
 # Uses LibreHardwareMonitorLib

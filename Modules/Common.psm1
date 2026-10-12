@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Get-CMValue {
@@ -154,19 +154,22 @@ function Limit-CMCsvLog {
         }
         if ($utcCol -lt 0) { $utcCol = 0 }
 
-        $splitIdx = 1
+        $splitIdx = -1
         for ($i = 1; $i -lt ($lines.Length - $MinKeepLines); $i++) {
             $cols = $lines[$i].Split(';')
             if ($cols.Length -gt $utcCol) {
                 $ts = $cols[$utcCol].Trim('"')
-                $dt = [DateTime]::MinValue
-                if ([DateTime]::TryParse($ts, [ref]$dt)) {
-                    if ($dt -ge $cutoff) {
+                $dto = [DateTimeOffset]::MinValue
+                if ([DateTimeOffset]::TryParse($ts, [ref]$dto)) {
+                    if ($dto.UtcDateTime -ge $cutoff) {
                         $splitIdx = $i
                         break
                     }
                 }
             }
+        }
+        if ($splitIdx -lt 0) {
+            $splitIdx = [math]::Max(1, $lines.Length - $MinKeepLines)
         }
         if ($splitIdx -gt 1) {
             $tempPath = $Path + '.trim.tmp'

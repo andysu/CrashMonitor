@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 param([int]$Samples = 1)
 
 for ($i = 0; $i -lt $Samples; $i++) {

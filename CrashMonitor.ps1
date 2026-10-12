@@ -23,8 +23,8 @@ function Start-Collector {
     $status=Join-Path $state "worker-$Role.json"
     if (Test-Path -LiteralPath $status) { Remove-Item -LiteralPath $status -Force }
     $exe=Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    $args=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $PSScriptRoot 'Worker.ps1')),'-Role',$Role,'-RootPath',('"{0}"' -f $RootPath))
-    $proc=Start-Process -FilePath $exe -ArgumentList $args -WindowStyle Hidden -PassThru
+    $workerArgs=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $PSScriptRoot 'Worker.ps1')),'-Role',$Role,'-RootPath',('"{0}"' -f $RootPath))
+    $proc=Start-Process -FilePath $exe -ArgumentList $workerArgs -WindowStyle Hidden -PassThru
     return @{ Process=$proc; StartedMs=$clock.ElapsedMilliseconds; LastProgressMs=$clock.ElapsedMilliseconds; LastProgressUtc=''; Restarts=0 }
 }
 function Stop-Collector {

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 Write-Output '=== POST-TEST MONITOR STATUS ==='
 & 'C:\CrashMonitor\Scripts\Get-MonitorStatus.ps1' -RootPath 'C:\CrashMonitor'
 

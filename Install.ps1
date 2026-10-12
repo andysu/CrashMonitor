@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param([string]$RootPath='C:\CrashMonitor', [switch]$EnableCrashDumps, [switch]$DisableAutoReboot, [switch]$NoStart)
 $ErrorActionPreference='Stop'
@@ -15,14 +15,27 @@ if (Test-Path -LiteralPath $manifestPath) {
     foreach ($entry in $manifest.Files) {
         if ($entry.Path -notmatch '^[A-Za-z0-9_./-]+$' -or $entry.Path -match '(^|/)\.\.(/|$)' -or [IO.Path]::IsPathRooted($entry.Path)) { throw 'Invalid path in package manifest.' }
         $file=Join-Path $source $entry.Path
-        if (-not (Test-Path -LiteralPath $file) -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $entry.SHA256) { throw "Package checksum mismatch: $($entry.Path)" }
+        if (-not (Test-Path -LiteralPath $file)) { throw "Package file missing: $($entry.Path)" }
+        $actualHash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+        if ($actualHash -ne $entry.SHA256) {
+            $text = [IO.File]::ReadAllText($file)
+            $sha = [Security.Cryptography.SHA256]::Create()
+            $matched = $false
+            try {
+                $lfHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($text -replace "`r`n", "`n"))))).Replace('-', '')
+                $crlfHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($text -replace "`r?`n", "`r`n"))))).Replace('-', '')
+                if ($entry.SHA256 -eq $lfHash -or $entry.SHA256 -eq $crlfHash) { $matched = $true }
+            } finally { $sha.Dispose() }
+            if (-not $matched) { throw "Package checksum mismatch: $($entry.Path)" }
+        }
     }
 }
 # Validate pure logic before touching the installed monitor or OS settings.
 & (Join-Path $source 'Tests/Test-Self.ps1')
 Import-Module (Join-Path $source 'Modules/Common.psm1')
 $config=Get-CMConfig $RootPath $source
-$files=@('CrashMonitor.ps1','Worker.ps1','Install.ps1','NightlyLogCleanup.ps1','RegisterNightlyTask.ps1','README.md','TODO.md','Config/defaults-v2.json','Modules/Common.psm1','Modules/EventCapture.psm1','Modules/TelemetryV2.psm1','Modules/Diagnostics.psm1','Modules/VoltageMonitor.psm1','Scripts/Export-Diagnostics.ps1','Scripts/Get-MonitorStatus.ps1','Scripts/Stop-Monitor.ps1','Tests/Test-Self.ps1','Tests/Test-Windows.ps1')
+$allScripts=@(Get-ChildItem (Join-Path $source 'Scripts') -Filter '*.ps1' -ErrorAction SilentlyContinue | ForEach-Object { "Scripts/$($_.Name)" })
+$files=@('CrashMonitor.ps1','Worker.ps1','Install.ps1','NightlyLogCleanup.ps1','RegisterNightlyTask.ps1','README.md','TODO.md','Config/defaults-v2.json','Modules/Common.psm1','Modules/EventCapture.psm1','Modules/TelemetryV2.psm1','Modules/Diagnostics.psm1','Modules/VoltageMonitor.psm1','Tests/Test-Self.ps1','Tests/Test-Windows.ps1') + $allScripts
 if (Test-Path -LiteralPath $manifestPath) { $files+= 'manifest.json' }
 $backup=Join-Path $RootPath ('Backups/v2-'+[datetime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
 [void][IO.Directory]::CreateDirectory($backup)
@@ -46,11 +59,22 @@ foreach ($relative in $files + @('Config/config.json')) {
         Copy-Item -LiteralPath $target -Destination $saved -Force
     }
 }
+$toolsDir=Join-Path $RootPath 'Tools'
+if (Test-Path -LiteralPath $toolsDir) {
+    $toolsBackup=Join-Path $backup 'Tools'
+    [void][IO.Directory]::CreateDirectory($toolsBackup)
+    Copy-Item -Path "$toolsDir\*" -Destination $toolsBackup -Recurse -Force -ErrorAction SilentlyContinue
+}
 if ($source.TrimEnd('\') -ne $RootPath) {
     foreach ($relative in $files) {
         $target=Join-Path $RootPath $relative
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
         Copy-Item -LiteralPath (Join-Path $source $relative) -Destination $target -Force
+    }
+    $toolsSrc=Join-Path $source 'Tools'
+    if (Test-Path -LiteralPath $toolsSrc) {
+        [void][IO.Directory]::CreateDirectory($toolsDir)
+        Copy-Item -Path "$toolsSrc\*" -Destination $toolsDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 $config.SchemaVersion=2
@@ -69,8 +93,8 @@ if ($EnableCrashDumps) {
     Write-Warning 'Automatic memory dump configured. Pagefile settings were preserved: verify their capacity and free space. A later planned reboot may be needed for OS dump settings to take effect.'
 }
 $exe=Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-$args='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -RootPath "{1}" -NonInteractive' -f (Join-Path $RootPath 'CrashMonitor.ps1'),$RootPath
-$action=New-ScheduledTaskAction -Execute $exe -Argument $args -WorkingDirectory $RootPath
+$taskArgs='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -RootPath "{1}" -NonInteractive' -f (Join-Path $RootPath 'CrashMonitor.ps1'),$RootPath
+$action=New-ScheduledTaskAction -Execute $exe -Argument $taskArgs -WorkingDirectory $RootPath
 $trigger=New-ScheduledTaskTrigger -AtStartup
 $taskPrincipal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
