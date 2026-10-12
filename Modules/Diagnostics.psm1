@@ -128,9 +128,6 @@ function New-CMIncident {
                             } else { $tail += $l }
                         } else { $tail += $l }
                     }
-                    if ($tail.Count -eq 0 -and $rawTail.Count -gt 0) {
-                        $tail = @($rawTail | Where-Object { $_ -ne $header })
-                    }
                     if ($tail.Count -gt 300) { $tail = $tail[($tail.Count - 300)..($tail.Count - 1)] }
                     $outLines = @($header) + $tail
                     $outLines | Set-Content -LiteralPath (Join-Path $dir $name) -Encoding UTF8
@@ -145,8 +142,12 @@ function New-CMIncident {
     $hbIncidentPath = Join-Path $dir 'heartbeat-v2.csv'
     if (Test-Path -LiteralPath $hbIncidentPath) {
         $hbRows = @(Import-Csv -LiteralPath $hbIncidentPath -Delimiter ';' -ErrorAction SilentlyContinue)
-        if ($hbRows.Count) {
-            $lastHbUtcStr = $hbRows[-1].Utc
+        $preCrashHb = @($hbRows | Where-Object {
+            $dto = [DateTimeOffset]::MinValue
+            [DateTimeOffset]::TryParse($_.Utc, [ref]$dto) -and $dto.UtcDateTime -le $bootUtcDt
+        })
+        if ($preCrashHb.Count) {
+            $lastHbUtcStr = $preCrashHb[-1].Utc
             $lastHbDto = [DateTimeOffset]::MinValue
             if ([DateTimeOffset]::TryParse($lastHbUtcStr, [ref]$lastHbDto)) {
                 $lastHeartbeatUtc = $lastHbDto.UtcDateTime.ToString('o')
@@ -156,6 +157,15 @@ function New-CMIncident {
     }
 
     # 4. Telemetry extremes in the last 15 minutes before crash
+    $parseNum = {
+        param($raw)
+        if ($null -eq $raw -or $raw -eq '' -or $raw -eq 'N/A') { return $null }
+        $clean = [string]$raw -replace '[^\d\.-]', ''
+        $val = 0.0
+        if ([double]::TryParse($clean, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$val)) { return $val }
+        return $null
+    }
+
     $preCrashExtremes = [ordered]@{
         WindowMinutes = 15
         SampleCount = 0
@@ -175,48 +185,69 @@ function New-CMIncident {
     $telIncidentPath = Join-Path $dir 'telemetry-v2.csv'
     if (Test-Path -LiteralPath $telIncidentPath) {
         $telRows = @(Import-Csv -LiteralPath $telIncidentPath -Delimiter ';' -ErrorAction SilentlyContinue)
-        $windowCutoff = $bootUtcDt.AddMinutes(-15)
+        $anchorUtc = $bootUtcDt
+        if ($lastHeartbeatUtc) {
+            $aDto = [DateTimeOffset]::MinValue
+            if ([DateTimeOffset]::TryParse($lastHeartbeatUtc, [ref]$aDto)) { $anchorUtc = $aDto.UtcDateTime }
+        }
+        $windowCutoff = $anchorUtc.AddMinutes(-15)
         $recentRows = @($telRows | Where-Object {
             $rDto = [DateTimeOffset]::MinValue
-            if ([DateTimeOffset]::TryParse($_.Utc, [ref]$rDto)) { $rDto.UtcDateTime -ge $windowCutoff } else { $true }
+            if ([DateTimeOffset]::TryParse($_.Utc, [ref]$rDto)) {
+                $rDto.UtcDateTime -ge $windowCutoff -and $rDto.UtcDateTime -le $anchorUtc
+            } else { $false }
         })
         if ($recentRows.Count) {
             $preCrashExtremes.SampleCount = $recentRows.Count
             foreach ($r in $recentRows) {
-                if ($r.CpuUsagePct -and [double]$r.CpuUsagePct -gt $preCrashExtremes.MaxCpuUsagePct) { $preCrashExtremes.MaxCpuUsagePct = [double]$r.CpuUsagePct }
-                if ($r.RamAvailableMB) {
-                    $ram = [double]$r.RamAvailableMB
-                    if ($null -eq $preCrashExtremes.MinRamAvailableMB -or $ram -lt $preCrashExtremes.MinRamAvailableMB) { $preCrashExtremes.MinRamAvailableMB = $ram }
+                $cpu = & $parseNum $r.CpuUsagePct
+                if ($null -ne $cpu -and ($null -eq $preCrashExtremes.MaxCpuUsagePct -or $cpu -gt $preCrashExtremes.MaxCpuUsagePct)) { $preCrashExtremes.MaxCpuUsagePct = $cpu }
+
+                $ramAvail = & $parseNum $r.RamAvailableMB
+                if ($null -ne $ramAvail -and ($null -eq $preCrashExtremes.MinRamAvailableMB -or $ramAvail -lt $preCrashExtremes.MinRamAvailableMB)) { $preCrashExtremes.MinRamAvailableMB = $ramAvail }
+
+                $ramUsed = & $parseNum $r.RamUsedPct
+                if ($null -ne $ramUsed -and ($null -eq $preCrashExtremes.MaxRamUsedPct -or $ramUsed -gt $preCrashExtremes.MaxRamUsedPct)) { $preCrashExtremes.MaxRamUsedPct = $ramUsed }
+
+                $qLen = & $parseNum $r.DiskQueueLength
+                if ($null -ne $qLen -and ($null -eq $preCrashExtremes.MaxDiskQueueLength -or $qLen -gt $preCrashExtremes.MaxDiskQueueLength)) { $preCrashExtremes.MaxDiskQueueLength = $qLen }
+
+                if ($r.PSObject.Properties['IoLatencyMs']) {
+                    $ioLat = & $parseNum $r.IoLatencyMs
+                    if ($null -ne $ioLat -and ($null -eq $preCrashExtremes.MaxIoLatencyMs -or $ioLat -gt $preCrashExtremes.MaxIoLatencyMs)) { $preCrashExtremes.MaxIoLatencyMs = $ioLat }
                 }
-                if ($r.RamUsedPct -and [double]$r.RamUsedPct -gt $preCrashExtremes.MaxRamUsedPct) { $preCrashExtremes.MaxRamUsedPct = [double]$r.RamUsedPct }
-                if ($r.DiskQueueLength -and [double]$r.DiskQueueLength -gt $preCrashExtremes.MaxDiskQueueLength) { $preCrashExtremes.MaxDiskQueueLength = [double]$r.DiskQueueLength }
-                if ($r.PSObject.Properties['IoLatencyMs'] -and $r.IoLatencyMs -and [double]$r.IoLatencyMs -gt $preCrashExtremes.MaxIoLatencyMs) { $preCrashExtremes.MaxIoLatencyMs = [double]$r.IoLatencyMs }
+
                 if ($r.HardwareSensorsJson) {
                     try {
                         $s = $r.HardwareSensorsJson | ConvertFrom-Json
-                        if ($s.Plus12V -and $s.Plus12V -ne 'N/A') {
-                            $v = [double]$s.Plus12V
-                            if ($null -eq $preCrashExtremes.Min12V -or $v -lt $preCrashExtremes.Min12V) { $preCrashExtremes.Min12V = $v }
-                            if ($null -eq $preCrashExtremes.Max12V -or $v -gt $preCrashExtremes.Max12V) { $preCrashExtremes.Max12V = $v }
+                        $v12 = & $parseNum $s.Plus12V
+                        if ($null -ne $v12) {
+                            if ($null -eq $preCrashExtremes.Min12V -or $v12 -lt $preCrashExtremes.Min12V) { $preCrashExtremes.Min12V = $v12 }
+                            if ($null -eq $preCrashExtremes.Max12V -or $v12 -gt $preCrashExtremes.Max12V) { $preCrashExtremes.Max12V = $v12 }
                         }
-                        if ($s.Plus5V -and $s.Plus5V -ne 'N/A') {
-                            $v = [double]$s.Plus5V
-                            if ($null -eq $preCrashExtremes.Min5V -or $v -lt $preCrashExtremes.Min5V) { $preCrashExtremes.Min5V = $v }
-                            if ($null -eq $preCrashExtremes.Max5V -or $v -gt $preCrashExtremes.Max5V) { $preCrashExtremes.Max5V = $v }
+                        $v5 = & $parseNum $s.Plus5V
+                        if ($null -ne $v5) {
+                            if ($null -eq $preCrashExtremes.Min5V -or $v5 -lt $preCrashExtremes.Min5V) { $preCrashExtremes.Min5V = $v5 }
+                            if ($null -eq $preCrashExtremes.Max5V -or $v5 -gt $preCrashExtremes.Max5V) { $preCrashExtremes.Max5V = $v5 }
                         }
-                        if ($s.Plus33V -and $s.Plus33V -ne 'N/A') {
-                            $v = [double]$s.Plus33V
-                            if ($null -eq $preCrashExtremes.Min3V3 -or $v -lt $preCrashExtremes.Min3V3) { $preCrashExtremes.Min3V3 = $v }
-                            if ($null -eq $preCrashExtremes.Max3V3 -or $v -gt $preCrashExtremes.Max3V3) { $preCrashExtremes.Max3V3 = $v }
+                        $v33 = & $parseNum $s.Plus33V
+                        if ($null -ne $v33) {
+                            if ($null -eq $preCrashExtremes.Min3V3 -or $v33 -lt $preCrashExtremes.Min3V3) { $preCrashExtremes.Min3V3 = $v33 }
+                            if ($null -eq $preCrashExtremes.Max3V3 -or $v33 -gt $preCrashExtremes.Max3V3) { $preCrashExtremes.Max3V3 = $v33 }
                         }
-                        if ($s.Vcore -and $s.Vcore -ne 'N/A') {
-                            $v = [double]$s.Vcore
-                            if ($null -eq $preCrashExtremes.MinVcore -or $v -lt $preCrashExtremes.MinVcore) { $preCrashExtremes.MinVcore = $v }
-                            if ($null -eq $preCrashExtremes.MaxVcore -or $v -gt $preCrashExtremes.MaxVcore) { $preCrashExtremes.MaxVcore = $v }
+                        $vCore = & $parseNum $s.Vcore
+                        if ($null -ne $vCore) {
+                            if ($null -eq $preCrashExtremes.MinVcore -or $vCore -lt $preCrashExtremes.MinVcore) { $preCrashExtremes.MinVcore = $vCore }
+                            if ($null -eq $preCrashExtremes.MaxVcore -or $vCore -gt $preCrashExtremes.MaxVcore) { $preCrashExtremes.MaxVcore = $vCore }
                         }
-                        if ($s.CpuTemp -and $s.CpuTemp -ne 'N/A' -and [double]$s.CpuTemp -gt $preCrashExtremes.MaxCpuTemp) { $preCrashExtremes.MaxCpuTemp = [double]$s.CpuTemp }
-                        if ($s.DiskTemp -and $s.DiskTemp -ne 'N/A' -and [double]$s.DiskTemp -gt $preCrashExtremes.MaxDiskTemp) { $preCrashExtremes.MaxDiskTemp = [double]$s.DiskTemp }
-                        if ($s.ThermalZoneTemp -and [double]$s.ThermalZoneTemp -gt $preCrashExtremes.MaxThermalZoneTemp) { $preCrashExtremes.MaxThermalZoneTemp = [double]$s.ThermalZoneTemp }
+                        $cTemp = & $parseNum $s.CpuTemp
+                        if ($null -ne $cTemp -and ($null -eq $preCrashExtremes.MaxCpuTemp -or $cTemp -gt $preCrashExtremes.MaxCpuTemp)) { $preCrashExtremes.MaxCpuTemp = $cTemp }
+
+                        $dTemp = & $parseNum $s.DiskTemp
+                        if ($null -ne $dTemp -and ($null -eq $preCrashExtremes.MaxDiskTemp -or $dTemp -gt $preCrashExtremes.MaxDiskTemp)) { $preCrashExtremes.MaxDiskTemp = $dTemp }
+
+                        $tzTemp = & $parseNum $s.ThermalZoneTemp
+                        if ($null -ne $tzTemp -and ($null -eq $preCrashExtremes.MaxThermalZoneTemp -or $tzTemp -gt $preCrashExtremes.MaxThermalZoneTemp)) { $preCrashExtremes.MaxThermalZoneTemp = $tzTemp }
                     } catch { }
                 }
             }
@@ -230,7 +261,7 @@ function New-CMIncident {
     if (Test-Path -LiteralPath $smartCurPath) {
         $curSmart = Read-CMJson $smartCurPath
         $prevSmart = if (Test-Path -LiteralPath $smartPrevPath) { Read-CMJson $smartPrevPath } else { $null }
-        $smartAnalysis = Compare-CMSmartSnapshots -CurrentSnapshot $curSmart -PreviousSnapshot $prevSmart
+        $smartAnalysis = Compare-CMSmartSnapshots -CurrentSnapshot $curSmart -PreviousSnapshot $prevSmart -RestartClassification $classification.Type
     }
 
     $workerStates = if ($PreviousSession -and $PreviousSession.LastKnownHealth) { $PreviousSession.LastKnownHealth.Workers } else { $null }
@@ -258,7 +289,7 @@ function New-CMIncident {
         "Silence / gap to boot: $(if ($null -ne $crashGapSeconds) { "${crashGapSeconds}s" } else { 'Unknown' })"
     )
     if ($smartAnalysis) {
-        $lines+=@("SMART verdict: $($smartAnalysis.Verdict)", "Hardware power loss confirmed: $($smartAnalysis.HardwarePowerLossConfirmed)")
+        $lines+=@("SMART verdict: $($smartAnalysis.Verdict)", "Power loss suspected: $($smartAnalysis.PowerLossSuspected) (Confidence: $($smartAnalysis.Confidence))")
     }
     if ($preCrashExtremes.SampleCount -gt 0) {
         $lines+=@("Max CPU load (15m): $(if ($null -ne $preCrashExtremes.MaxCpuUsagePct) { "$($preCrashExtremes.MaxCpuUsagePct)%" } else { 'N/A' })",

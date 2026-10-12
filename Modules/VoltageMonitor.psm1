@@ -139,6 +139,8 @@ function Get-CrashMonitorVoltageSnapshot {
     $snapshot = [ordered]@{
         Timestamp  = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         Vcore      = "N/A"
+        Plus12V    = "N/A"
+        Plus5V     = "N/A"
         Plus33V    = "N/A"
         AVCC       = "N/A"
         "3VSB"     = "N/A"
@@ -164,9 +166,16 @@ function Get-CrashMonitorVoltageSnapshot {
                 if ($k -like "*3VSB*")        { $snapshot["3VSB"] = $val }
                 if ($k -like "*VBat*")        { $snapshot.VBat    = $val }
                 if ($k -like "*VTT*")         { $snapshot.VTT     = $val }
+
+                if ($k -like "*Plus_12V*" -or $k -like "*+12V*") { $snapshot.Plus12V = $val }
+                elseif ($snapshot.Plus12V -eq "N/A" -and $k -like "*NCT6796D*Voltage_2*") { $snapshot.Plus12V = [math]::Round([double]$val * 12.0, 3) }
+
+                if ($k -like "*Plus_5V*" -or $k -like "*+5V*") { $snapshot.Plus5V = $val }
+                elseif ($snapshot.Plus5V -eq "N/A" -and $k -like "*NCT6796D*Voltage_6*") { $snapshot.Plus5V = [math]::Round([double]$val * 2.5, 3) }
+
                 if ($k -like "*Power*CPU_Package*") { $snapshot.CpuPower = "${val}W" }
-                if ($snapshot.CpuTemp -eq "N/A" -and ($k -like "*Temperature*CPU_Package*" -or $k -like "*Temperature*Core_Max*" -or $k -like "*Temperature*CPU_Core*")) { $snapshot.CpuTemp = "${val}C" }
-                if ($snapshot.DiskTemp -eq "N/A" -and $k -like "*Temperature*" -and ($k -like "*SSD*" -or $k -like "*ST1000*" -or $k -like "*Disk*")) { $snapshot.DiskTemp = "${val}C" }
+                if ($snapshot.CpuTemp -eq "N/A" -and ($k -like "*Temperature*CPU_Package*" -or $k -like "*Temperature*Core_Max*" -or $k -like "*Temperature*CPU_Core*")) { $snapshot.CpuTemp = [math]::Round([double]$val, 1) }
+                if ($snapshot.DiskTemp -eq "N/A" -and $k -like "*Temperature*" -and ($k -like "*SSD*" -or $k -like "*ST1000*" -or $k -like "*Disk*")) { $snapshot.DiskTemp = [math]::Round([double]$val, 1) }
             }
             $snapshot.RawSummary = ($summaryParts -join "|")
         }

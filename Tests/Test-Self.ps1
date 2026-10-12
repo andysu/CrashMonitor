@@ -133,8 +133,10 @@ try {
         for ($i=0;$i -lt 350;$i++) { Write-CMTelemetry $temp $metrics }
         $tempTestPath = Join-Path $temp 'Evidence/Logs/temperatures.csv'
         [IO.File]::WriteAllLines($tempTestPath, @('"Utc";"Local";"NVMe_NAND_C";"NVMe_Controller_C";"HDD_C";"Status";"Alert"','"2026-10-12T00:00:00Z";"2026-10-12T03:00:00+03:00";"45";"50";"35";"OK";""'))
-        $fixtureBoot=[pscustomobject]@{BootKey='AAAAAAAAAAAAAAAAAAAAAAAA';BootUtc=$boot.ToString('o')}
-        New-CMIncident -Root $temp -Config $cfg -Boot $fixtureBoot -Events @($event,$whea)
+        $fixtureBootUtc = [DateTime]::UtcNow.AddMinutes(5)
+        $fixtureBoot = [pscustomobject]@{BootKey='AAAAAAAAAAAAAAAAAAAAAAAA';BootUtc=$fixtureBootUtc.ToString('o')}
+        $fixtureEvent = ConvertFrom-CMEventXml (New-Fixture 41 'Microsoft-Windows-Kernel-Power' ($fixtureBootUtc.AddSeconds(3).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')) '<Data Name="BugcheckCode">292</Data><Data Name="PowerButtonTimestamp">0</Data>')
+        New-CMIncident -Root $temp -Config $cfg -Boot $fixtureBoot -Events @($fixtureEvent,$whea)
         $incident=Join-Path $temp 'Evidence/Incidents/AAAAAAAAAAAAAAAAAAAAAAAA'
         $report=Read-CMJson (Join-Path $incident 'report.json')
         Assert-CM ($report.Classification.Type -eq 'Bugcheck' -and $report.BootEvents.Count -eq 2) 'Actual incident builder preserves classification and event data'
@@ -176,10 +178,37 @@ try {
         # Unit tests for SMART snapshot comparison
         $s1 = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=10; UnsafeShutdowns=2; StartStopCycleCount=$null; LoadUnloadCycleCount=$null }) }
         $s2 = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=11; UnsafeShutdowns=3; StartStopCycleCount=$null; LoadUnloadCycleCount=$null }) }
-        $cmp = Compare-CMSmartSnapshots $s2 $s1
-        Assert-CM ($cmp.HardwarePowerLossConfirmed -eq $true -and $cmp.DiskDeltas[0].PowerCyclesDelta -eq 1) 'SMART delta detects hardware power loss cycle increase'
-        $cmpNoLoss = Compare-CMSmartSnapshots $s2 $s2
-        Assert-CM ($cmpNoLoss.HardwarePowerLossConfirmed -eq $false -and $cmpNoLoss.DiskDeltas[0].PowerCyclesDelta -eq 0) 'Constant SMART counters confirm reset without power cycle'
+        $cmp = Compare-CMSmartSnapshots -CurrentSnapshot $s2 -PreviousSnapshot $s1 -RestartClassification 'UnexpectedReset'
+        Assert-CM ($cmp.PowerLossSuspected -eq $true -and $cmp.Confidence -eq 'High') 'SMART delta detects hardware power loss cycle increase'
+        $cmpNoLoss = Compare-CMSmartSnapshots -CurrentSnapshot $s2 -PreviousSnapshot $s2 -RestartClassification 'UnexpectedReset'
+        Assert-CM ($cmpNoLoss.PowerLossSuspected -eq $false -and $cmpNoLoss.Confidence -eq 'Moderate') 'Constant SMART counters confirm reset without power cycle'
+
+        # SMART: Seagate head parking and spindowns do NOT trigger false power loss
+        $sSeagatePrev = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=100; UnsafeShutdowns=5; StartStopCycleCount=200; LoadUnloadCycleCount=1000 }) }
+        $sSeagateCur  = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=100; UnsafeShutdowns=5; StartStopCycleCount=201; LoadUnloadCycleCount=1015 }) }
+        $cmpSeagate = Compare-CMSmartSnapshots -CurrentSnapshot $sSeagateCur -PreviousSnapshot $sSeagatePrev -RestartClassification 'UnexpectedReset'
+        Assert-CM ($cmpSeagate.PowerLossSuspected -eq $false) 'HDD head parking and spin cycle deltas do not trigger false power loss'
+
+        # SMART: Clean planned restart skips SMART evaluation
+        $cmpClean = Compare-CMSmartSnapshots -CurrentSnapshot $s2 -PreviousSnapshot $s1 -RestartClassification 'RequestedRestart'
+        Assert-CM ($cmpClean.Confidence -eq 'NotApplicable' -and $cmpClean.PowerLossSuspected -eq $false) 'Clean planned restart skips SMART delta evaluation'
+
+        # SMART: Missing/null counters report InsufficientData honestly without blaming CPU
+        $sNull1 = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=$null; UnsafeShutdowns=$null }) }
+        $sNull2 = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=$null; UnsafeShutdowns=$null }) }
+        $cmpNull = Compare-CMSmartSnapshots -CurrentSnapshot $sNull2 -PreviousSnapshot $sNull1 -RestartClassification 'UnexpectedReset'
+        Assert-CM ($cmpNull.Confidence -eq 'InsufficientData' -and $cmpNull.PowerLossSuspected -eq $null) 'Missing SMART counters report InsufficientData honestly'
+
+        # Dedicated unit test for atomic file replacement
+        $atomicTestPath = Join-Path $temp 'atomic-replace.txt'
+        [IO.File]::WriteAllText($atomicTestPath, 'OriginalContent')
+        Limit-CMTextLog -Path $atomicTestPath -MaxLines 10
+        Assert-CM (([IO.File]::ReadAllText($atomicTestPath)) -eq 'OriginalContent') 'Atomic replacement preserves content under limit'
+        $multiLines = 1..25 | ForEach-Object { "Line $_" }
+        [IO.File]::WriteAllLines($atomicTestPath, $multiLines)
+        Limit-CMTextLog -Path $atomicTestPath -MaxLines 5
+        $atomicTrimmed = @([IO.File]::ReadAllLines($atomicTestPath))
+        Assert-CM ($atomicTrimmed.Length -eq 5 -and $atomicTrimmed[-1] -eq 'Line 25' -and -not (Test-Path ($atomicTestPath + '.trim.tmp')) -and -not (Test-Path ($atomicTestPath + '.trim.bak'))) 'Atomic text log trimming trims correctly and cleans swap files'
     } finally {
         & $diagnostics {
             Set-Item Function:script:Get-CMInventory $script:SavedInventoryFixture

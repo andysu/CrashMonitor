@@ -30,7 +30,7 @@ function Get-CMEventXPath {
     if ($Channel -eq 'System') {
         $filter = "(Level=1 or Level=2 or EventID=1074 or EventID=6005 or EventID=6006 or EventID=6008 or EventID=12 or EventID=13 or EventID=37 or EventID=129 or EventID=153 or EventID=157 or EventID=219 or EventID=2004 or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-Kernel-Power'] or Provider[@Name='Microsoft-Windows-Kernel-Boot'] or Provider[@Name='Microsoft-Windows-Time-Service'] or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='volmgr'])"
     } elseif ($Channel -eq 'Application') { $filter = '(Level=1 or Level=2 or EventID=1001 or EventID=2004 or Provider[@Name=''Microsoft-Windows-Resource-Exhaustion-Detector''])' }
-    else { $filter = '(Level=1 or Level=2 or Level=3)' }
+    else { $filter = '(Level=1 or Level=2 or Level=3 or Level=4)' }
     return "*[System[$bounds and $filter]]"
 }
 

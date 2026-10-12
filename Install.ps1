@@ -111,6 +111,12 @@ if ($EnableCrashDumps) {
     if ($DisableAutoReboot) { New-ItemProperty -LiteralPath $key -Name AutoReboot -Value 0 -PropertyType DWord -Force | Out-Null }
     Write-Warning 'Automatic memory dump configured. Pagefile settings were preserved: verify their capacity and free space. A later planned reboot may be needed for OS dump settings to take effect.'
 }
+try {
+    $wevtutil = Join-Path $env:SystemRoot 'System32/wevtutil.exe'
+    if (Test-Path -LiteralPath $wevtutil) {
+        & $wevtutil sl 'Microsoft-Windows-Storage-Storport/Operational' /e:true 2>$null
+    }
+} catch { }
 $exe=Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
 $taskArgs='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -RootPath "{1}" -NonInteractive' -f (Join-Path $RootPath 'CrashMonitor.ps1'),$RootPath
 $action=New-ScheduledTaskAction -Execute $exe -Argument $taskArgs -WorkingDirectory $RootPath

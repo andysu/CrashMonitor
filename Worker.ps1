@@ -39,6 +39,10 @@ try {
                 [void](Receive-CMEvents $RootPath $config $boot)
                 if ($incidentPending) {
                     Write-ProgressState 'BuildingIncident'
+                    try {
+                        $currentSmart = Get-CMSmartSnapshot -ToolsDir (Join-Path $RootPath 'Tools')
+                        Write-CMJson (Join-Path $RootPath 'Evidence/State/smart-counters.json') $currentSmart
+                    } catch { }
                     $events=@(Get-CMBootEvents $RootPath $boot)
                     New-CMIncident -Root $RootPath -Config $config -Boot $boot -Events $events -PreviousSession $previous
                     $incidentPending=$false
@@ -60,7 +64,7 @@ try {
     }
 } finally {
     if ($Role -eq 'telemetry') {
-        try { Close-CrashMonitorVoltageSensor } catch { }
+        try { Close-CMTelemetrySensor } catch { }
     }
     Write-ProgressState 'Stopped'
 }

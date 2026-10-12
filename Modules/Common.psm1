@@ -225,11 +225,16 @@ function Limit-CMCsvLog {
                     for ($j = $splitIdx; $j -lt $lines.Length; $j++) {
                         $writer.WriteLine($lines[$j])
                     }
+                    $writer.Flush()
                 } finally {
                     $writer.Dispose()
                 }
                 if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
-                [void][IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+                try {
+                    [void][IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+                } catch {
+                    # If target file is transiently locked by live reader, don't abort rotation
+                }
             } finally {
                 if ([IO.File]::Exists($tempPath)) { [void][IO.File]::Delete($tempPath) }
                 if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
@@ -250,7 +255,11 @@ function Limit-CMTextLog {
             try {
                 [IO.File]::WriteAllLines($tempPath, $keep)
                 if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
-                [void][IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+                try {
+                    [void][IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+                } catch {
+                    # If target file is transiently locked, don't abort rotation
+                }
             } finally {
                 if ([IO.File]::Exists($tempPath)) { [void][IO.File]::Delete($tempPath) }
                 if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
@@ -316,13 +325,37 @@ function Get-CMSmartSnapshot {
         $cmd = Get-Command 'smartctl.exe' -ErrorAction SilentlyContinue
         if ($cmd) { $smartctlPath = $cmd.Source }
     }
+    function Invoke-ExecutableWithTimeout([string]$ExePath, [string]$Args, [int]$TimeoutMs = 3000) {
+        $psi = New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName = $ExePath
+        $psi.Arguments = $Args
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $proc = [Diagnostics.Process]::Start($psi)
+        if ($null -eq $proc) { return $null }
+        $out = $null
+        try {
+            if ($proc.WaitForExit($TimeoutMs)) {
+                $out = $proc.StandardOutput.ReadToEnd()
+            } else {
+                try { $proc.Kill() } catch { }
+            }
+        } finally { $proc.Dispose() }
+        return $out
+    }
+
     if (Test-Path -LiteralPath $smartctlPath) {
         try {
-            $scanOut = & $smartctlPath --scan-open -j 2>$null | ConvertFrom-Json
+            $rawJson = Invoke-ExecutableWithTimeout -ExePath $smartctlPath -Args '--scan-open -j' -TimeoutMs 3000
+            $scanOut = if ($rawJson) { $rawJson | ConvertFrom-Json } else { $null }
             if ($scanOut -and $scanOut.devices) {
                 $snapshot.Source = 'smartctl'
                 foreach ($dev in $scanOut.devices) {
-                    $devInfo = & $smartctlPath -a $dev.name -j 2>$null | ConvertFrom-Json
+                    $devJson = Invoke-ExecutableWithTimeout -ExePath $smartctlPath -Args "-a $($dev.name) -j" -TimeoutMs 3000
+                    $devInfo = if ($devJson) { $devJson | ConvertFrom-Json } else { $null }
+                    if (-not $devInfo) { continue }
                     $diskData = [ordered]@{
                         Device = $dev.name
                         Type = $dev.type
@@ -356,8 +389,9 @@ function Get-CMSmartSnapshot {
     }
     # Fallback to Windows Storage CIM
     try {
-        $physDisks = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_PhysicalDisk' -ErrorAction SilentlyContinue)
-        $relCounters = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_StorageReliabilityCounter' -ErrorAction SilentlyContinue)
+        $cimOpt = New-CimSessionOption
+        $physDisks = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_PhysicalDisk' -OperationTimeoutSec 5 -ErrorAction SilentlyContinue)
+        $relCounters = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_StorageReliabilityCounter' -OperationTimeoutSec 5 -ErrorAction SilentlyContinue)
         foreach ($pd in $physDisks) {
             $rc = $relCounters | Where-Object { $_.DeviceId -eq $pd.DeviceId } | Select-Object -First 1
             $diskData = [ordered]@{
@@ -379,16 +413,29 @@ function Get-CMSmartSnapshot {
 }
 
 function Compare-CMSmartSnapshots {
-    param($CurrentSnapshot, $PreviousSnapshot)
+    param($CurrentSnapshot, $PreviousSnapshot, [string]$RestartClassification = '')
     $analysis = [ordered]@{
         EvaluatedUtc = [DateTime]::UtcNow.ToString('o')
+        Classification = $RestartClassification
         PowerCyclesIncreased = $false
         UnsafeShutdownsIncreased = $false
-        HardwarePowerLossConfirmed = $false
+        PowerLossSuspected = $null
+        Confidence = 'InsufficientData'
         Verdict = 'No comparative SMART baseline'
         DiskDeltas = @()
     }
     if (-not $CurrentSnapshot -or -not $PreviousSnapshot) { return [pscustomobject]$analysis }
+
+    if ($RestartClassification -and $RestartClassification -notin @('UnexpectedReset', 'Unknown')) {
+        $analysis.PowerLossSuspected = $false
+        $analysis.Confidence = 'NotApplicable'
+        $analysis.Verdict = "SMART delta evaluation skipped: orderly planned reboot ($RestartClassification)"
+        $analysis['HardwarePowerLossConfirmed'] = $false
+        return [pscustomobject]$analysis
+    }
+
+    $validMetricsCount = 0
+
     foreach ($cur in $CurrentSnapshot.Disks) {
         $identifier = if ($cur.DeviceId) { $cur.DeviceId } else { $cur.Device }
         $prev = $null
@@ -400,33 +447,50 @@ function Compare-CMSmartSnapshots {
             $delta = [ordered]@{
                 Disk = $identifier
                 Model = if ($cur.FriendlyName) { $cur.FriendlyName } else { $cur.Model }
-                PowerCyclesDelta = 0L
-                UnsafeShutdownsDelta = 0L
+                PowerCyclesDelta = $null
+                UnsafeShutdownsDelta = $null
             }
+
+            # Only evaluate actual power cycle count (SMART 12 or NVMe power_cycles)
             if ($cur.PowerCycles -ne $null -and $prev.PowerCycles -ne $null) {
                 $delta.PowerCyclesDelta = [long]$cur.PowerCycles - [long]$prev.PowerCycles
                 if ($delta.PowerCyclesDelta -gt 0) { $analysis.PowerCyclesIncreased = $true }
-            } elseif ($cur.StartStopCycleCount -ne $null -and $prev.StartStopCycleCount -ne $null) {
-                $delta.PowerCyclesDelta = [long]$cur.StartStopCycleCount - [long]$prev.StartStopCycleCount
-                if ($delta.PowerCyclesDelta -gt 0) { $analysis.PowerCyclesIncreased = $true }
+                $validMetricsCount++
             }
+
+            # Only evaluate actual unsafe shutdowns (SMART 192 Power-Off_Retract_Count or NVMe unsafe_shutdowns)
+            # NEVER use LoadUnloadCycleCount (193 head parking) or StartStopCycleCount (4 spindown)
             if ($cur.UnsafeShutdowns -ne $null -and $prev.UnsafeShutdowns -ne $null) {
                 $delta.UnsafeShutdownsDelta = [long]$cur.UnsafeShutdowns - [long]$prev.UnsafeShutdowns
                 if ($delta.UnsafeShutdownsDelta -gt 0) { $analysis.UnsafeShutdownsIncreased = $true }
-            } elseif ($cur.LoadUnloadCycleCount -ne $null -and $prev.LoadUnloadCycleCount -ne $null) {
-                $delta.UnsafeShutdownsDelta = [long]$cur.LoadUnloadCycleCount - [long]$prev.LoadUnloadCycleCount
-                if ($delta.UnsafeShutdownsDelta -gt 0) { $analysis.UnsafeShutdownsIncreased = $true }
+                $validMetricsCount++
             }
+
             $analysis.DiskDeltas += [pscustomobject]$delta
         }
     }
-    if ($analysis.PowerCyclesIncreased -or $analysis.UnsafeShutdownsIncreased) {
-        $analysis.HardwarePowerLossConfirmed = $true
-        $analysis.Verdict = 'Physical power interruption detected (SMART cycle/unsafe-shutdown counters incremented across boot)'
+
+    if ($validMetricsCount -eq 0) {
+        $analysis.PowerLossSuspected = $null
+        $analysis.Confidence = 'InsufficientData'
+        $analysis.Verdict = 'Insufficient SMART data to determine physical power state (counters not reported by storage driver)'
+    } elseif ($analysis.PowerCyclesIncreased -and $analysis.UnsafeShutdownsIncreased) {
+        $analysis.PowerLossSuspected = $true
+        $analysis.Confidence = 'High'
+        $analysis.Verdict = 'High likelihood of physical power interruption (both power cycles and unsafe shutdowns incremented across reboot)'
+    } elseif ($analysis.PowerCyclesIncreased -or $analysis.UnsafeShutdownsIncreased) {
+        $analysis.PowerLossSuspected = $true
+        $analysis.Confidence = 'Moderate'
+        $analysis.Verdict = 'Potential physical power interruption detected (disk cycle or emergency retract counter incremented across reboot)'
     } else {
-        $analysis.HardwarePowerLossConfirmed = $false
-        $analysis.Verdict = 'No hardware power cycle detected (disk cycle counters remained constant across reset; suspect CPU/watchdog/internal reset)'
+        $analysis.PowerLossSuspected = $false
+        $analysis.Confidence = 'Moderate'
+        $analysis.Verdict = 'No disk power cycle detected despite unexpected reset (disk power remained continuous across reset; suspect watchdog, kernel freeze or internal reset)'
     }
+
+    # Backward compatibility for any consumers reading HardwarePowerLossConfirmed
+    $analysis['HardwarePowerLossConfirmed'] = ($analysis.PowerLossSuspected -eq $true)
+
     return [pscustomobject]$analysis
 }
 

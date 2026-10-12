@@ -261,4 +261,13 @@ function Write-CMTelemetry {
     Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/telemetry-v2.csv') -Columns $script:Columns -Row $Row
     if ($Config) { Send-CMUdpHeartbeat -Config $Config -Row $Row }
 }
-Export-ModuleMember -Function Get-CMTelemetryColumns, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat
+
+function Close-CMTelemetrySensor {
+    try {
+        if (Get-Command 'Close-CrashMonitorVoltageSensor' -ErrorAction SilentlyContinue) {
+            Close-CrashMonitorVoltageSensor
+        }
+    } catch { }
+}
+
+Export-ModuleMember -Function Get-CMTelemetryColumns, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor

@@ -60,11 +60,8 @@ try {
         }
     }
 
-    # Record current boot SMART counters baseline
-    try {
-        $currentSmart = Get-CMSmartSnapshot -ToolsDir (Join-Path $RootPath 'Tools')
-        Write-CMJson (Join-Path $state 'smart-counters.json') $currentSmart
-    } catch { }
+    # SMART snapshot is taken asynchronously by events worker during incident building to prevent supervisor hang
+
 
     # Migrate telemetry-v2.csv if schema was updated (e.g. addition of IoLatencyMs column)
     $telemetryCsv = Join-Path $RootPath 'Evidence/Logs/telemetry-v2.csv'
