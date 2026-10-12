@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 param([string]$RootPath = 'C:\CrashMonitor')
 
 Write-Output '=== POST-TEST MONITOR STATUS ==='

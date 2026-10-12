@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param([string]$RootPath='C:\CrashMonitor', [switch]$EnableCrashDumps, [switch]$DisableAutoReboot, [switch]$NoStart)
 $ErrorActionPreference='Stop'

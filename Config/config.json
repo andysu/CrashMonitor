@@ -14,7 +14,11 @@
     "MinFreeSpaceMB":  512,
     "MaxIncidents":  100,
     "RetentionHours":  4,
+    "EnableUdpHeartbeat":  false,
+    "UdpHeartbeatHost":  "127.0.0.1",
+    "UdpHeartbeatPort":  514,
     "OptionalEventChannels":  [
-                                  "Microsoft-Windows-WindowsUpdateClient/Operational"
+                                  "Microsoft-Windows-WindowsUpdateClient/Operational",
+                                  "Microsoft-Windows-Storage-Storport/Operational"
                               ]
 }

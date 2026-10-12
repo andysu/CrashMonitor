@@ -61,3 +61,30 @@
   - [x] Зберегти `README.md` та `TODO.md` з чистими закінченнями рядків LF відповідно до `.gitattributes`.
 - [x] **Релізний пакет на сервері:**
   - [x] Сформувати чистий трансферний архів `C:\CrashMonitor-Repo-Release.zip` на сервері Windows (дублікат у `C:\CrashMonitor\CrashMonitor-Repo-Release.zip`), готовий до перенесення на робочу станцію для `git init`.
+
+## Програма глибокої діагностики збоїв та стійкості (Етапи 1–6, 2026-10-12):
+- [x] **Етап 1: Гарантоване збереження доказів та ізоляція бутів:**
+  - [x] Замінити `[IO.File]::Copy` на атомарний `[IO.File]::Replace` у `Limit-CMCsvLog` та `Limit-CMTextLog` (захист від затирання логів у 0 байт при раптовому знеструмленні 220V).
+  - [x] Зберігати знімок процесів (`processes-latest.json` -> `processes-previous.json`) та хвостів логів попереднього сеансу до старту нових воркерів у `CrashMonitor.ps1`.
+  - [x] Збагатити `New-CMIncident` у `Diagnostics.psm1`: копіювати до-аварійний знімок процесів у пакет інциденту; розраховувати `LastHeartbeatUtc`, розрив до старту ядра в секундах, стан воркерів та екстремуми температур/напруг за останні 15 хвилин (`PreCrashMetrics`).
+- [x] **Етап 2: Оптимізація та безпека сенсорів (A1, A7):**
+  - [x] Перевести `VoltageMonitor.psm1` на сінглтон `VoltageReader` без повторних `Import-Module -Force` у циклі опитування; додати реалізацію `Close()` / `Dispose()`.
+  - [x] Обмежити класи LibreHardwareMonitor: активувати лише CPU, Motherboard, Storage (вимкнути GPU, Network, Controller).
+  - [x] Додати виклик `Close-CrashMonitorVoltageSensor` у блок `finally` воркера телеметрії.
+  - [x] Додати постійну колонку `IoLatencyMs` у `telemetry-v2.csv` (23 стовпці) для відстеження деградації диска в динаміці.
+  - [x] Додати перевірку порогів напруг (+12V, +5V, +3.3V) та винести попередження сенсорів окремо від системних помилок воркера.
+- [x] **Етап 3: Розширення джерел журналів подій (A5, A6):**
+  - [x] Парсити поля `PowerButtonTimestamp`, `LongPowerButtonPressDetected`, `SleepInProgress` з XML події `Kernel-Power 41` у `Common.psm1`.
+  - [x] Додати джерела у фільтр подій System: `Kernel-Processor-Power 37`, `Ntfs 50/140`, `Resource-Exhaustion-Detector 2004`, `Kernel-PnP 219`, `Kernel-Boot`, `Storport/Operational`.
+  - [x] Додати пошук дампів у каталозі `%SystemRoot%\LiveKernelReports`.
+- [x] **Етап 4: Розрізнення типу скиду через SMART-лічильники (B1):**
+  - [x] Реалізувати зняття лічильників аварійних відключень (`Unsafe Shutdowns`, `StartStopCycleCount`, `LoadUnloadCycleCount`) на кожному старті та розрахунок різниці з попереднім бутом (`Compare-CMSmartSnapshots`).
+  - [x] Підтримати читання через Windows Storage CIM та через `smartctl` (у разі наявності в `Tools/smartmontools`).
+- [x] **Етап 5: Скрипт аналізу історії перезавантажень (B5):**
+  - [x] Створити `Scripts/Find-CrashPatterns.ps1` для аналізу повної історії подій (41, 6008, 1074, 12, 13) з побудовою часової матриці збоїв.
+- [x] **Етап 6: Мережевий пульс на віддалений пристрій (B4):**
+  - [x] Реалізувати UDP-пульс (`Send-CMUdpHeartbeat`) у `TelemetryV2.psm1` / `CrashMonitor.ps1` з конфігурацією в `config.json`.
+- [x] **Верифікація, тести та оновлення релізу:**
+  - [x] Розширити набір тестів у `Tests/Test-Self.ps1` (61/61 тестів пройдено: перевірка атомарної заміни, розбору Event 41, SMART-метрик).
+  - [x] Оновити `manifest.json`, документацію `README.md` та перебудувати релізний архів `C:\CrashMonitor-Repo-Release.zip`.
+  - [ ] Перезапустити монітор на сервері та перевірити нормалізацію пам'яті й дескрипторів.

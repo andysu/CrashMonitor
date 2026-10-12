@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 param([string]$RootPath = 'C:\CrashMonitor')
 
 $os = Get-CimInstance Win32_OperatingSystem

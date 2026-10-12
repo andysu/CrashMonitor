@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Get-CMValue {
@@ -123,20 +123,64 @@ function Get-CMRestartClassification {
     $bug = @($current | Where-Object { $_.Provider -match 'WER-SystemErrorReporting|BugCheck' -and $_.EventId -eq 1001 })
     $dirty = @($current | Where-Object { $_.Provider -eq 'EventLog' -and $_.EventId -eq 6008 })
     $code = 0L
-    if ($kp.Count) { [void][long]::TryParse([string](Get-CMValue $kp[-1].Data 'BugcheckCode' '0'), [ref]$code) }
+    $powerButtonTimestamp = 0L
+    $longPowerButton = 'false'
+    $sleepInProgress = 0
+    if ($kp.Count) {
+        [void][long]::TryParse([string](Get-CMValue $kp[-1].Data 'BugcheckCode' '0'), [ref]$code)
+        [void][long]::TryParse([string](Get-CMValue $kp[-1].Data 'PowerButtonTimestamp' '0'), [ref]$powerButtonTimestamp)
+        $longPowerButton = [string](Get-CMValue $kp[-1].Data 'LongPowerButtonPressDetected' 'false')
+        [void][int]::TryParse([string](Get-CMValue $kp[-1].Data 'SleepInProgress' '0'), [ref]$sleepInProgress)
+    }
     if ($code -ne 0 -or $bug.Count) {
-        return [pscustomobject]@{ Type='Bugcheck'; BugcheckCode=$code; Explanation='Windows recorded a stop error. Inspect EventData and the memory dump; the faulty component is not identified here.' }
+        return [pscustomobject]@{
+            Type='Bugcheck'
+            BugcheckCode=$code
+            PowerButtonTimestamp=$powerButtonTimestamp
+            LongPowerButtonPressDetected=$longPowerButton
+            SleepInProgress=$sleepInProgress
+            Explanation='Windows recorded a stop error. Inspect EventData and the memory dump; the faulty component is not identified here.'
+        }
     }
     if ($kp.Count -or $dirty.Count) {
-        return [pscustomobject]@{ Type='UnexpectedReset'; BugcheckCode=$code; Explanation='Unclean shutdown confirmed. Power loss, hardware reset, watchdog, hang or an unrecorded bugcheck remain possible.' }
+        $detail = 'Unclean shutdown confirmed. Power loss, hardware reset, watchdog, hang or an unrecorded bugcheck remain possible.'
+        if ($longPowerButton -eq 'true' -or $powerButtonTimestamp -gt 0) {
+            $detail = "Unclean shutdown triggered by hardware power button (LongPowerButtonPressDetected=$longPowerButton, PowerButtonTimestamp=$powerButtonTimestamp)."
+        } elseif ($sleepInProgress -gt 0) {
+            $detail = "Unclean shutdown occurred while sleep/hibernation transition was in progress (SleepInProgress=$sleepInProgress)."
+        }
+        return [pscustomobject]@{
+            Type='UnexpectedReset'
+            BugcheckCode=$code
+            PowerButtonTimestamp=$powerButtonTimestamp
+            LongPowerButtonPressDetected=$longPowerButton
+            SleepInProgress=$sleepInProgress
+            Explanation=$detail
+        }
     }
     $lower = $BootUtc.AddMinutes(-30)
     if ($null -ne $PreviousBootUtc -and $PreviousBootUtc -gt $lower) { $lower = [datetime]$PreviousBootUtc }
     $planned = @($Events | Where-Object {
         $_.Provider -eq 'User32' -and $_.EventId -eq 1074 -and ([datetime]::Parse($_.Utc).ToUniversalTime()) -ge $lower -and ([datetime]::Parse($_.Utc).ToUniversalTime()) -lt $BootUtc
     })
-    if ($planned.Count) { return [pscustomobject]@{ Type='RequestedRestart'; BugcheckCode=$null; Explanation='User32 recorded a shutdown/restart request. Inspect its process, account and reason; this does not establish whether every shutdown stage completed.' } }
-    return [pscustomobject]@{ Type='Unknown'; BugcheckCode=$null; Explanation='Insufficient boot evidence. A heartbeat gap alone is not proof of a crash.' }
+    if ($planned.Count) {
+        return [pscustomobject]@{
+            Type='RequestedRestart'
+            BugcheckCode=$null
+            PowerButtonTimestamp=0L
+            LongPowerButtonPressDetected='false'
+            SleepInProgress=0
+            Explanation='User32 recorded a shutdown/restart request. Inspect its process, account and reason; this does not establish whether every shutdown stage completed.'
+        }
+    }
+    return [pscustomobject]@{
+        Type='Unknown'
+        BugcheckCode=$null
+        PowerButtonTimestamp=0L
+        LongPowerButtonPressDetected='false'
+        SleepInProgress=0
+        Explanation='Insufficient boot evidence. A heartbeat gap alone is not proof of a crash.'
+    }
 }
 
 function Limit-CMCsvLog {
@@ -173,6 +217,7 @@ function Limit-CMCsvLog {
         }
         if ($splitIdx -gt 1) {
             $tempPath = $Path + '.trim.tmp'
+            $backupPath = $Path + '.trim.bak'
             try {
                 $writer = [IO.File]::CreateText($tempPath)
                 try {
@@ -183,9 +228,11 @@ function Limit-CMCsvLog {
                 } finally {
                     $writer.Dispose()
                 }
-                [void][IO.File]::Copy($tempPath, $Path, $true)
+                if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
+                [void][IO.File]::Replace($tempPath, $Path, $backupPath, $true)
             } finally {
                 if ([IO.File]::Exists($tempPath)) { [void][IO.File]::Delete($tempPath) }
+                if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
             }
         }
     }
@@ -198,7 +245,16 @@ function Limit-CMTextLog {
         $lines = @([IO.File]::ReadAllLines($Path))
         if ($lines.Length -gt $MaxLines) {
             $keep = $lines[($lines.Length - $MaxLines)..($lines.Length - 1)]
-            [IO.File]::WriteAllLines($Path, $keep)
+            $tempPath = $Path + '.trim.tmp'
+            $backupPath = $Path + '.trim.bak'
+            try {
+                [IO.File]::WriteAllLines($tempPath, $keep)
+                if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
+                [void][IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+            } finally {
+                if ([IO.File]::Exists($tempPath)) { [void][IO.File]::Delete($tempPath) }
+                if ([IO.File]::Exists($backupPath)) { [void][IO.File]::Delete($backupPath) }
+            }
         }
     }
 }
@@ -245,6 +301,133 @@ function Invoke-CMRotation {
         $total += $file.Length
         if ($file.LastWriteTimeUtc -lt $archiveCutoff -or $total -gt ([long]$Config.MaxEvidenceMB * 1MB)) { Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue }
     }
+}
+
+function Get-CMSmartSnapshot {
+    param([string]$ToolsDir = 'C:\CrashMonitor\Tools')
+    $snapshot = [ordered]@{
+        Utc = [DateTime]::UtcNow.ToString('o')
+        Source = 'CIM'
+        Disks = @()
+    }
+    # Check for smartctl first if available
+    $smartctlPath = Join-Path $ToolsDir 'smartmontools\smartctl.exe'
+    if (-not (Test-Path -LiteralPath $smartctlPath)) {
+        $cmd = Get-Command 'smartctl.exe' -ErrorAction SilentlyContinue
+        if ($cmd) { $smartctlPath = $cmd.Source }
+    }
+    if (Test-Path -LiteralPath $smartctlPath) {
+        try {
+            $scanOut = & $smartctlPath --scan-open -j 2>$null | ConvertFrom-Json
+            if ($scanOut -and $scanOut.devices) {
+                $snapshot.Source = 'smartctl'
+                foreach ($dev in $scanOut.devices) {
+                    $devInfo = & $smartctlPath -a $dev.name -j 2>$null | ConvertFrom-Json
+                    $diskData = [ordered]@{
+                        Device = $dev.name
+                        Type = $dev.type
+                        Model = $devInfo.model_name
+                        PowerCycles = $null
+                        UnsafeShutdowns = $null
+                        PowerOnHours = $null
+                        Temperature = $null
+                    }
+                    if ($devInfo.power_cycle_count) { $diskData.PowerCycles = [long]$devInfo.power_cycle_count }
+                    if ($devInfo.power_on_time -and $devInfo.power_on_time.hours) { $diskData.PowerOnHours = [long]$devInfo.power_on_time.hours }
+                    if ($devInfo.temperature -and $devInfo.temperature.current) { $diskData.Temperature = [double]$devInfo.temperature.current }
+                    # NVMe attributes
+                    if ($devInfo.nvme_smart_health_information_log) {
+                        $nvme = $devInfo.nvme_smart_health_information_log
+                        if ($nvme.unsafe_shutdowns) { $diskData.UnsafeShutdowns = [long]$nvme.unsafe_shutdowns }
+                        if ($nvme.power_cycles) { $diskData.PowerCycles = [long]$nvme.power_cycles }
+                    }
+                    # ATA SMART attributes (ID 12 Power_Cycle_Count, ID 192 Power-Off_Retract_Count)
+                    if ($devInfo.ata_smart_attributes -and $devInfo.ata_smart_attributes.table) {
+                        foreach ($attr in $devInfo.ata_smart_attributes.table) {
+                            if ($attr.id -eq 12) { $diskData.PowerCycles = [long]$attr.raw.value }
+                            if ($attr.id -eq 192) { $diskData.UnsafeShutdowns = [long]$attr.raw.value }
+                        }
+                    }
+                    $snapshot.Disks += [pscustomobject]$diskData
+                }
+                return [pscustomobject]$snapshot
+            }
+        } catch { }
+    }
+    # Fallback to Windows Storage CIM
+    try {
+        $physDisks = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_PhysicalDisk' -ErrorAction SilentlyContinue)
+        $relCounters = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_StorageReliabilityCounter' -ErrorAction SilentlyContinue)
+        foreach ($pd in $physDisks) {
+            $rc = $relCounters | Where-Object { $_.DeviceId -eq $pd.DeviceId } | Select-Object -First 1
+            $diskData = [ordered]@{
+                DeviceId = [string]$pd.DeviceId
+                FriendlyName = [string]$pd.FriendlyName
+                MediaType = [string]$pd.MediaType
+                BusType = [string]$pd.BusType
+                StartStopCycleCount = if ($rc -and $null -ne $rc.StartStopCycleCount) { [long]$rc.StartStopCycleCount } else { $null }
+                LoadUnloadCycleCount = if ($rc -and $null -ne $rc.LoadUnloadCycleCount) { [long]$rc.LoadUnloadCycleCount } else { $null }
+                PowerOnHours = if ($rc -and $null -ne $rc.PowerOnHours) { [long]$rc.PowerOnHours } else { $null }
+                ReadErrorsTotal = if ($rc -and $null -ne $rc.ReadErrorsTotal) { [long]$rc.ReadErrorsTotal } else { $null }
+                WriteErrorsTotal = if ($rc -and $null -ne $rc.WriteErrorsTotal) { [long]$rc.WriteErrorsTotal } else { $null }
+                Temperature = if ($rc -and $null -ne $rc.Temperature) { [double]$rc.Temperature } else { $null }
+            }
+            $snapshot.Disks += [pscustomobject]$diskData
+        }
+    } catch { }
+    return [pscustomobject]$snapshot
+}
+
+function Compare-CMSmartSnapshots {
+    param($CurrentSnapshot, $PreviousSnapshot)
+    $analysis = [ordered]@{
+        EvaluatedUtc = [DateTime]::UtcNow.ToString('o')
+        PowerCyclesIncreased = $false
+        UnsafeShutdownsIncreased = $false
+        HardwarePowerLossConfirmed = $false
+        Verdict = 'No comparative SMART baseline'
+        DiskDeltas = @()
+    }
+    if (-not $CurrentSnapshot -or -not $PreviousSnapshot) { return [pscustomobject]$analysis }
+    foreach ($cur in $CurrentSnapshot.Disks) {
+        $identifier = if ($cur.DeviceId) { $cur.DeviceId } else { $cur.Device }
+        $prev = $null
+        foreach ($p in $PreviousSnapshot.Disks) {
+            $pId = if ($p.DeviceId) { $p.DeviceId } else { $p.Device }
+            if ($pId -eq $identifier) { $prev = $p; break }
+        }
+        if ($prev) {
+            $delta = [ordered]@{
+                Disk = $identifier
+                Model = if ($cur.FriendlyName) { $cur.FriendlyName } else { $cur.Model }
+                PowerCyclesDelta = 0L
+                UnsafeShutdownsDelta = 0L
+            }
+            if ($cur.PowerCycles -ne $null -and $prev.PowerCycles -ne $null) {
+                $delta.PowerCyclesDelta = [long]$cur.PowerCycles - [long]$prev.PowerCycles
+                if ($delta.PowerCyclesDelta -gt 0) { $analysis.PowerCyclesIncreased = $true }
+            } elseif ($cur.StartStopCycleCount -ne $null -and $prev.StartStopCycleCount -ne $null) {
+                $delta.PowerCyclesDelta = [long]$cur.StartStopCycleCount - [long]$prev.StartStopCycleCount
+                if ($delta.PowerCyclesDelta -gt 0) { $analysis.PowerCyclesIncreased = $true }
+            }
+            if ($cur.UnsafeShutdowns -ne $null -and $prev.UnsafeShutdowns -ne $null) {
+                $delta.UnsafeShutdownsDelta = [long]$cur.UnsafeShutdowns - [long]$prev.UnsafeShutdowns
+                if ($delta.UnsafeShutdownsDelta -gt 0) { $analysis.UnsafeShutdownsIncreased = $true }
+            } elseif ($cur.LoadUnloadCycleCount -ne $null -and $prev.LoadUnloadCycleCount -ne $null) {
+                $delta.UnsafeShutdownsDelta = [long]$cur.LoadUnloadCycleCount - [long]$prev.LoadUnloadCycleCount
+                if ($delta.UnsafeShutdownsDelta -gt 0) { $analysis.UnsafeShutdownsIncreased = $true }
+            }
+            $analysis.DiskDeltas += [pscustomobject]$delta
+        }
+    }
+    if ($analysis.PowerCyclesIncreased -or $analysis.UnsafeShutdownsIncreased) {
+        $analysis.HardwarePowerLossConfirmed = $true
+        $analysis.Verdict = 'Physical power interruption detected (SMART cycle/unsafe-shutdown counters incremented across boot)'
+    } else {
+        $analysis.HardwarePowerLossConfirmed = $false
+        $analysis.Verdict = 'No hardware power cycle detected (disk cycle counters remained constant across reset; suspect CPU/watchdog/internal reset)'
+    }
+    return [pscustomobject]$analysis
 }
 
 Export-ModuleMember -Function *-CM*

@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][ValidateSet('events','telemetry')][string]$Role, [Parameter(Mandatory=$true)][string]$RootPath)
 $ErrorActionPreference='Stop'
@@ -34,7 +34,7 @@ try {
             Write-ProgressState 'Collecting'
             $drive=New-Object IO.DriveInfo([IO.Path]::GetPathRoot($RootPath))
             if ($drive.AvailableFreeSpace -lt ([long]$config.MinFreeSpaceMB*1MB)) { throw "Low free space: less than $($config.MinFreeSpaceMB) MB. Collection paused; heartbeat continues." }
-            if ($Role -eq 'telemetry') { Write-CMTelemetry $RootPath (Get-CMTelemetry $RootPath $codeRoot $config $boot) }
+            if ($Role -eq 'telemetry') { Write-CMTelemetry $RootPath (Get-CMTelemetry $RootPath $codeRoot $config $boot) $config }
             else {
                 [void](Receive-CMEvents $RootPath $config $boot)
                 if ($incidentPending) {
@@ -58,4 +58,9 @@ try {
             Start-Sleep -Milliseconds 200
         }
     }
-} finally { Write-ProgressState 'Stopped' }
+} finally {
+    if ($Role -eq 'telemetry') {
+        try { Close-CrashMonitorVoltageSensor } catch { }
+    }
+    Write-ProgressState 'Stopped'
+}

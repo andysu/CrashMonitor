@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 param([string]$RootPath='C:\CrashMonitor')
 # Compatibility entry point. The events worker performs v2 rotation every minute.
 # Never truncate legacy logs, panic evidence, or incident reports.

@@ -1,4 +1,4 @@
-﻿{
+{
   "SchemaVersion": 2,
   "SampleIntervalSeconds": 5,
   "HeartbeatIntervalSeconds": 2,
@@ -13,5 +13,11 @@
   "MaxIncidents": 100,
   "MaxEvidenceMB": 512,
   "EnableHardwareSensors": false,
-  "OptionalEventChannels": ["Microsoft-Windows-WindowsUpdateClient/Operational"]
+  "EnableUdpHeartbeat": false,
+  "UdpHeartbeatHost": "127.0.0.1",
+  "UdpHeartbeatPort": 514,
+  "OptionalEventChannels": [
+    "Microsoft-Windows-WindowsUpdateClient/Operational",
+    "Microsoft-Windows-Storage-Storport/Operational"
+  ]
 }

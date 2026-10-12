@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param()
 $ErrorActionPreference='Stop'
@@ -35,6 +35,12 @@ try {
     Assert-CM ((Get-CMRestartClassification @($event) $boot).Type -eq 'Bugcheck') 'Current boot with nonzero BugcheckCode is a stop error'
     $zero=ConvertFrom-CMEventXml (New-Fixture 41 'Microsoft-Windows-Kernel-Power' '2026-10-07T12:00:03Z' '<Data Name="BugcheckCode">0</Data>')
     Assert-CM ((Get-CMRestartClassification @($zero) $boot).Type -eq 'UnexpectedReset') 'Zero BugcheckCode does not assert PSU failure'
+    $pwrBtn=ConvertFrom-CMEventXml (New-Fixture 41 'Microsoft-Windows-Kernel-Power' '2026-10-07T12:00:03Z' '<Data Name="BugcheckCode">0</Data><Data Name="LongPowerButtonPressDetected">true</Data>')
+    $btnClass=Get-CMRestartClassification @($pwrBtn) $boot
+    Assert-CM ($btnClass.Type -eq 'UnexpectedReset' -and $btnClass.Explanation -match 'power button') 'Event 41 with power button press distinguishes power button from PSU drop'
+    $sleepEv=ConvertFrom-CMEventXml (New-Fixture 41 'Microsoft-Windows-Kernel-Power' '2026-10-07T12:00:03Z' '<Data Name="BugcheckCode">0</Data><Data Name="SleepInProgress">1</Data>')
+    $sleepClass=Get-CMRestartClassification @($sleepEv) $boot
+    Assert-CM ($sleepClass.Type -eq 'UnexpectedReset' -and $sleepClass.Explanation -match 'sleep') 'Event 41 with SleepInProgress distinguishes sleep transition failure'
     $old=ConvertFrom-CMEventXml (New-Fixture 41 'Microsoft-Windows-Kernel-Power' '2026-10-06T12:00:03Z')
     Assert-CM ((Get-CMRestartClassification @($old) $boot).Type -eq 'Unknown') 'Previous-day Kernel-Power event is not attached to current boot'
     Assert-CM ((Get-CMRestartClassification @() $boot).Type -eq 'Unknown') 'Heartbeat gap alone is not a crash verdict'
@@ -70,7 +76,7 @@ try {
     $rejected=$false;try { Write-CMCsv $csv @('Wrong') @{Wrong='x'} } catch { $rejected=$true }
     Assert-CM $rejected 'Schema mismatch is rejected without overwriting old data'
     $cols=@(Get-CMTelemetryColumns)
-    Assert-CM ($cols.Count -eq 22 -and @($cols | Select-Object -Unique).Count -eq $cols.Count) 'Telemetry schema has fixed unique columns'
+    Assert-CM ($cols.Count -eq 23 -and @($cols | Select-Object -Unique).Count -eq $cols.Count) 'Telemetry schema has fixed unique columns'
     $cfg=Get-CMConfig $temp $root
     Assert-CM (-not $cfg.EnableHardwareSensors -and $cfg.SchemaVersion -eq 2) 'Hardware driver probing is opt-in'
     # Mock only the OS data source; run the actual collector and CSV serializer.
@@ -132,6 +138,7 @@ try {
         $incident=Join-Path $temp 'Evidence/Incidents/AAAAAAAAAAAAAAAAAAAAAAAA'
         $report=Read-CMJson (Join-Path $incident 'report.json')
         Assert-CM ($report.Classification.Type -eq 'Bugcheck' -and $report.BootEvents.Count -eq 2) 'Actual incident builder preserves classification and event data'
+        Assert-CM ($null -ne $report.PreCrashMetrics) 'Incident builder computes and includes PreCrashMetrics in report.json'
         $csvTail=@(Import-Csv (Join-Path $incident 'telemetry-v2.csv') -Delimiter ';')
         Assert-CM ($csvTail.Count -eq 300 -and $csvTail[-1].RamAvailableMB -eq '8192') 'Incident CSV tail includes its header and 300 readable samples'
         Assert-CM (Test-Path (Join-Path $incident 'temperatures.csv')) 'Incident builder includes dedicated temperatures.csv in evidence package'
@@ -165,6 +172,14 @@ try {
         Limit-CMCsvLog -Path $expiredCsv -RetentionHours 4 -MinKeepLines 100
         $afterExpTrim = @(Import-Csv $expiredCsv -Delimiter ';')
         Assert-CM ($afterExpTrim.Count -eq 100 -and $afterExpTrim[-1].Value -eq '499') 'Limit-CMCsvLog keeps MinKeepLines when all rows are expired'
+
+        # Unit tests for SMART snapshot comparison
+        $s1 = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=10; UnsafeShutdowns=2; StartStopCycleCount=$null; LoadUnloadCycleCount=$null }) }
+        $s2 = [pscustomobject]@{ Disks = @([pscustomobject]@{ DeviceId='0'; PowerCycles=11; UnsafeShutdowns=3; StartStopCycleCount=$null; LoadUnloadCycleCount=$null }) }
+        $cmp = Compare-CMSmartSnapshots $s2 $s1
+        Assert-CM ($cmp.HardwarePowerLossConfirmed -eq $true -and $cmp.DiskDeltas[0].PowerCyclesDelta -eq 1) 'SMART delta detects hardware power loss cycle increase'
+        $cmpNoLoss = Compare-CMSmartSnapshots $s2 $s2
+        Assert-CM ($cmpNoLoss.HardwarePowerLossConfirmed -eq $false -and $cmpNoLoss.DiskDeltas[0].PowerCyclesDelta -eq 0) 'Constant SMART counters confirm reset without power cycle'
     } finally {
         & $diagnostics {
             Set-Item Function:script:Get-CMInventory $script:SavedInventoryFixture

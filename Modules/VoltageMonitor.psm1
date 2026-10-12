@@ -1,4 +1,4 @@
-﻿# =====================================================================
+# =====================================================================
 # CrashMonitor Module: VoltageMonitor.psm1
 # Hardware Voltage (+12V, +5V, +3.3V, Vcore, Vbat) & Power Telemetry
 # Uses LibreHardwareMonitorLib
@@ -13,10 +13,12 @@ function Initialize-CrashMonitorVoltageSensor {
         [string]$ToolsDir = "C:\CrashMonitor\Tools\LibreHardwareMonitor"
     )
 
-    if ($script:LibLoaded) { return $true }
+    if ($script:LibLoaded -and $script:ReaderObj) { return $true }
     if ("CrashMonitorVoltage.VoltageReader" -as [type]) {
         try {
-            $script:ReaderObj = New-Object CrashMonitorVoltage.VoltageReader
+            if (-not $script:ReaderObj) {
+                $script:ReaderObj = New-Object CrashMonitorVoltage.VoltageReader
+            }
             $script:LibLoaded = $true
             return $true
         } catch { }
@@ -63,11 +65,11 @@ namespace CrashMonitorVoltage {
             computer = new Computer {
                 IsCpuEnabled = true,
                 IsMotherboardEnabled = true,
-                IsMemoryEnabled = true,
-                IsGpuEnabled = true,
+                IsMemoryEnabled = false,
+                IsGpuEnabled = false,
                 IsStorageEnabled = true,
-                IsControllerEnabled = true,
-                IsNetworkEnabled = true
+                IsControllerEnabled = false,
+                IsNetworkEnabled = false
             };
             computer.Open();
             visitor = new UpdateVisitor();
@@ -208,4 +210,14 @@ function Write-CrashMonitorVoltageLog {
     }
 }
 
-Export-ModuleMember -Function Initialize-CrashMonitorVoltageSensor, Get-CrashMonitorVoltageSnapshot, Write-CrashMonitorVoltageLog
+function Close-CrashMonitorVoltageSensor {
+    [CmdletBinding()]
+    param()
+    if ($script:ReaderObj) {
+        try { $script:ReaderObj.Close() } catch { }
+        $script:ReaderObj = $null
+    }
+    $script:LibLoaded = $false
+}
+
+Export-ModuleMember -Function Initialize-CrashMonitorVoltageSensor, Get-CrashMonitorVoltageSnapshot, Write-CrashMonitorVoltageLog, Close-CrashMonitorVoltageSensor

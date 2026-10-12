@@ -1,6 +1,6 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 Import-Module (Join-Path $PSScriptRoot 'Common.psm1')
-$script:Columns = @('SchemaVersion','Utc','Local','UtcOffsetMinutes','BootKey','CpuUsagePct','RamAvailableMB','RamUsedPct','CommittedMB','CommitLimitMB','PoolNonpagedMB','PoolPagedMB','PagesPerSec','DiskQueueLength','DiskReadBytesPerSec','DiskWriteBytesPerSec','TopMemoryProcesses','DiskCountersJson','TemperatureStatus','HardwareSensorsJson','ErrorsJson','DurationMs')
+$script:Columns = @('SchemaVersion','Utc','Local','UtcOffsetMinutes','BootKey','CpuUsagePct','RamAvailableMB','RamUsedPct','CommittedMB','CommitLimitMB','PoolNonpagedMB','PoolPagedMB','PagesPerSec','DiskQueueLength','DiskReadBytesPerSec','DiskWriteBytesPerSec','TopMemoryProcesses','DiskCountersJson','TemperatureStatus','HardwareSensorsJson','ErrorsJson','IoLatencyMs','DurationMs')
 
 function Get-CMTelemetryColumns { return $script:Columns }
 
@@ -73,6 +73,7 @@ function Get-CMTelemetry {
         } catch { $errors.Add("ProcessSnapshot: $_") }
     } catch { $errors.Add("Processes: $_") }
     # Storage I/O latency probe: verifies filesystem responsiveness
+    $ioLatencyMs = $null
     try {
         $ioTimer = [Diagnostics.Stopwatch]::StartNew()
         $probePath = Join-Path $Root 'Evidence/State/io-probe.tmp'
@@ -85,20 +86,23 @@ function Get-CMTelemetry {
         } finally {
             $probeStream.Dispose()
         }
-        $ioLatencyMs = $ioTimer.ElapsedMilliseconds
+        $ioLatencyMs = [double]$ioTimer.ElapsedMilliseconds
         if ($ioLatencyMs -ge 1000) {
-            $errors.Add("High storage write latency: ${ioLatencyMs}ms")
             Write-CMLog $Root 'telemetry' "WARNING: High storage write latency on probe: ${ioLatencyMs}ms" 'WARNING'
         }
     } catch {
         $errors.Add("Storage probe failed: $_")
         Write-CMLog $Root 'telemetry' "ERROR: Storage probe write failure: $_" 'ERROR'
     }
+    $row.IoLatencyMs = $ioLatencyMs
     $row.TemperatureStatus='NOT_MEASURED'
     $hardwareSensorsLogged = $false
     if ($Config.EnableHardwareSensors) {
         try {
-            Import-Module (Join-Path $CodeRoot 'Modules/VoltageMonitor.psm1') -Force
+            if (-not (Get-Module VoltageMonitor)) {
+                $vmPath = Join-Path $CodeRoot 'Modules/VoltageMonitor.psm1'
+                if (Test-Path -LiteralPath $vmPath) { Import-Module $vmPath -ErrorAction SilentlyContinue }
+            }
             $sensors=Get-CrashMonitorVoltageSnapshot -ToolsDir (Join-Path $Root 'Tools/LibreHardwareMonitor')
             $row.HardwareSensorsJson=$sensors | ConvertTo-Json -Compress
             if ($sensors.CpuTemp -ne 'N/A' -or $sensors.DiskTemp -ne 'N/A' -or $sensors.RawSummary -match 'Temperature') {
@@ -118,9 +122,30 @@ function Get-CMTelemetry {
                         $deg = [double]$Matches[1]
                         if ($deg -ge 70.0) {
                             $alertMsg = "High temperature warning: $part (${deg}C >= 70C)"
-                            $errors.Add($alertMsg)
                             Write-CMLog $Root 'telemetry' "CRITICAL: $alertMsg" 'WARNING'
                         }
+                    }
+                }
+            }
+
+            # Voltage rail threshold detection (ATX specification tolerances +/- 5%)
+            if ($sensors.RawSummary) {
+                if ($sensors.Plus12V -ne 'N/A' -and [double]$sensors.Plus12V -gt 0) {
+                    $v12 = [double]$sensors.Plus12V
+                    if ($v12 -lt 11.40 -or $v12 -gt 12.60) {
+                        Write-CMLog $Root 'telemetry' "WARNING: +12V rail out of ATX spec: ${v12}V (spec: 11.40V - 12.60V)" 'WARNING'
+                    }
+                }
+                if ($sensors.Plus5V -ne 'N/A' -and [double]$sensors.Plus5V -gt 0) {
+                    $v5 = [double]$sensors.Plus5V
+                    if ($v5 -lt 4.75 -or $v5 -gt 5.25) {
+                        Write-CMLog $Root 'telemetry' "WARNING: +5V rail out of ATX spec: ${v5}V (spec: 4.75V - 5.25V)" 'WARNING'
+                    }
+                }
+                if ($sensors.Plus33V -ne 'N/A' -and [double]$sensors.Plus33V -gt 0) {
+                    $v33 = [double]$sensors.Plus33V
+                    if ($v33 -lt 3.135 -or $v33 -gt 3.465) {
+                        Write-CMLog $Root 'telemetry' "WARNING: +3.3V rail out of ATX spec: ${v33}V (spec: 3.135V - 3.465V)" 'WARNING'
                     }
                 }
             }
@@ -180,7 +205,6 @@ function Get-CMTelemetry {
                 if ($acpiTemp -ge 70.0) {
                     $tempAlert = 'HIGH_TEMP'
                     $alertMsg = "High ACPI thermal zone temperature: ${acpiTemp}C >= 70C"
-                    $errors.Add($alertMsg)
                     Write-CMLog $Root 'telemetry' "CRITICAL: $alertMsg" 'WARNING'
                 }
                 
@@ -204,8 +228,37 @@ function Get-CMTelemetry {
     return $row
 }
 
-function Write-CMTelemetry {
-    param([string]$Root, [System.Collections.IDictionary]$Row)
-    Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/telemetry-v2.csv') -Columns $script:Columns -Row $Row
+function Send-CMUdpHeartbeat {
+    param([hashtable]$Config, [System.Collections.IDictionary]$Row)
+    if (-not $Config -or -not $Config.ContainsKey('EnableUdpHeartbeat') -or -not $Config.EnableUdpHeartbeat -or -not $Config.UdpHeartbeatHost) { return }
+    try {
+        $port = 514
+        if ($Config.ContainsKey('UdpHeartbeatPort') -and [int]$Config.UdpHeartbeatPort -gt 0) { $port = [int]$Config.UdpHeartbeatPort }
+        $packet = [ordered]@{
+            SchemaVersion = 2
+            Utc = $Row.Utc
+            BootKey = $Row.BootKey
+            CpuPct = $Row.CpuUsagePct
+            RamPct = $Row.RamUsedPct
+            RamAvailMB = $Row.RamAvailableMB
+            DiskQLen = $Row.DiskQueueLength
+            IoLatencyMs = $Row.IoLatencyMs
+            TempStatus = $Row.TemperatureStatus
+        }
+        $json = ConvertTo-Json -InputObject $packet -Compress
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+        $client = New-Object Net.Sockets.UdpClient
+        try {
+            [void]$client.Send($bytes, $bytes.Length, [string]$Config.UdpHeartbeatHost, $port)
+        } finally {
+            $client.Dispose()
+        }
+    } catch { }
 }
-Export-ModuleMember -Function Get-CMTelemetryColumns, Get-CMTelemetry, Write-CMTelemetry
+
+function Write-CMTelemetry {
+    param([string]$Root, [System.Collections.IDictionary]$Row, [hashtable]$Config = $null)
+    Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/telemetry-v2.csv') -Columns $script:Columns -Row $Row
+    if ($Config) { Send-CMUdpHeartbeat -Config $Config -Row $Row }
+}
+Export-ModuleMember -Function Get-CMTelemetryColumns, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat
