@@ -14,6 +14,13 @@ function Initialize-CrashMonitorVoltageSensor {
     )
 
     if ($script:LibLoaded) { return $true }
+    if ("CrashMonitorVoltage.VoltageReader" -as [type]) {
+        try {
+            $script:ReaderObj = New-Object CrashMonitorVoltage.VoltageReader
+            $script:LibLoaded = $true
+            return $true
+        } catch { }
+    }
 
     $dllPath = Join-Path -Path $ToolsDir -ChildPath "LibreHardwareMonitorLib.dll"
     $hidPath = Join-Path -Path $ToolsDir -ChildPath "HidSharp.dll"

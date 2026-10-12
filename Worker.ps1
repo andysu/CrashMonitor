@@ -5,7 +5,15 @@ $ErrorActionPreference='Stop'
 $codeRoot=$PSScriptRoot
 Import-Module (Join-Path $codeRoot 'Modules/Common.psm1') -Force
 $config=Get-CMConfig $RootPath $codeRoot
-$boot=Read-CMJson (Join-Path $RootPath 'Evidence/State/boot.json')
+$bootPath=Join-Path $RootPath 'Evidence/State/boot.json'
+$boot=Read-CMJson $bootPath
+if (-not $boot) {
+    for ($attempt=0; $attempt -lt 5 -and -not $boot; $attempt++) {
+        Start-Sleep -Milliseconds 200
+        $boot=Read-CMJson $bootPath
+    }
+}
+if (-not $boot) { $boot=Get-CMBootInfo }
 $previous=Read-CMJson (Join-Path $RootPath 'Evidence/State/previous-session.json')
 $statusPath=Join-Path $RootPath "Evidence/State/worker-$Role.json"
 function Write-ProgressState {

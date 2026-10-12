@@ -5,6 +5,7 @@ param(
     [int]$CpuThreads = 6,
     [int]$RamTargetGB = 20,
     [double]$MaxSafeNvmeTempC = 75.0,
+    [double]$MaxSafeCpuTempC = 90.0,
     [string]$RootPath = 'C:\CrashMonitor'
 )
 
@@ -92,14 +93,37 @@ try {
         $nvmeCtrl = $null
         $nvmeNand = $null
         $hddTemp = $null
+        $cpuTemp = $null
         try {
             $tempCsv = Join-Path $RootPath 'Evidence/Logs/temperatures.csv'
             if (Test-Path -LiteralPath $tempCsv) {
-                $lastRow = Import-Csv -LiteralPath $tempCsv -Delimiter ';' | Select-Object -Last 1
-                if ($lastRow) {
-                    $nvmeCtrl = [double]$lastRow.NVMe_Controller_C
-                    $nvmeNand = [double]$lastRow.NVMe_NAND_C
-                    $hddTemp = [double]$lastRow.HDD_C
+                $h = Get-Content -LiteralPath $tempCsv -TotalCount 1 -ErrorAction SilentlyContinue
+                $t = Get-Content -LiteralPath $tempCsv -Tail 1 -ErrorAction SilentlyContinue
+                if ($h -and $t) {
+                    $lastRow = ConvertFrom-Csv -InputObject @($h, $t) -Delimiter ';' | Select-Object -First 1
+                    if ($lastRow) {
+                        if ($lastRow.NVMe_Controller_C) { $nvmeCtrl = [double]$lastRow.NVMe_Controller_C }
+                        if ($lastRow.NVMe_NAND_C) { $nvmeNand = [double]$lastRow.NVMe_NAND_C }
+                        if ($lastRow.HDD_C) { $hddTemp = [double]$lastRow.HDD_C }
+                    }
+                }
+            }
+            $telemCsv = Join-Path $RootPath 'Evidence/Logs/telemetry-v2.csv'
+            $tzTemp = $null
+            if (Test-Path -LiteralPath $telemCsv) {
+                $lastTelem = Get-Content -LiteralPath $telemCsv -Tail 1 -ErrorAction SilentlyContinue
+                if ($lastTelem) {
+                    $cols = $lastTelem.Split(';')
+                    if ($cols.Count -ge 20) {
+                        $rawJson = $cols[19].Trim('"').Replace('""', '"')
+                        $hw = $rawJson | ConvertFrom-Json
+                        if ($hw.RawSummary -match 'Temperature_CPU_Package:(\d+(\.\d+)?)') {
+                            $cpuTemp = [double]$Matches[1]
+                        } elseif ($hw.CpuTemp -and $hw.Source -ne 'MSAcpi_ThermalZoneTemperature') {
+                            $cpuTemp = [double]($hw.CpuTemp -replace '[^\d.]', '')
+                        }
+                        if ($hw.ThermalZoneTemp) { $tzTemp = [double]$hw.ThermalZoneTemp }
+                    }
                 }
             }
         } catch { }
@@ -110,12 +134,19 @@ try {
         $elapsed = $stopwatch.Elapsed
         $elapsedStr = "{0:D2}:{1:D2}:{2:D2}" -f $elapsed.Hours, $elapsed.Minutes, $elapsed.Seconds
 
-        Write-StressLog "[$elapsedStr / ${DurationMinutes}:00:00] NVMe Ctrl: ${nvmeCtrl}C | NVMe NAND: ${nvmeNand}C | HDD: ${hddTemp}C | Free RAM: ${freeRamMB} MB"
+        $cpuStr = if ($null -ne $cpuTemp) { "${cpuTemp}C" } elseif ($null -ne $tzTemp) { "ACPI-Zone:${tzTemp}C" } else { "N/A" }
+        Write-StressLog "[$elapsedStr / ${DurationMinutes}:00:00] CPU: $cpuStr | NVMe Ctrl: ${nvmeCtrl}C | NVMe NAND: ${nvmeNand}C | HDD: ${hddTemp}C | Free RAM: ${freeRamMB} MB"
 
-        # Safety tripwire: abort if NVMe temperature reaches dangerous threshold
+        # Safety tripwire: abort if NVMe or CPU temperature reaches dangerous threshold
         if ($null -ne $nvmeCtrl -and $nvmeCtrl -ge $MaxSafeNvmeTempC) {
             $aborted = $true
             $abortReason = "EMERGENCY THERMAL TRIPWIRE: NVMe Controller reached ${nvmeCtrl}C (threshold: ${MaxSafeNvmeTempC}C). Aborting to prevent SSD failure!"
+            Write-StressLog $abortReason
+            break
+        }
+        if ($null -ne $cpuTemp -and $cpuTemp -ge $MaxSafeCpuTempC) {
+            $aborted = $true
+            $abortReason = "EMERGENCY THERMAL TRIPWIRE: CPU reached ${cpuTemp}C (threshold: ${MaxSafeCpuTempC}C). Aborting to prevent CPU thermal throttling/damage!"
             Write-StressLog $abortReason
             break
         }

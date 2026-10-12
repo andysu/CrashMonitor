@@ -74,24 +74,34 @@ try {
     $cfg=Get-CMConfig $temp $root
     Assert-CM (-not $cfg.EnableHardwareSensors -and $cfg.SchemaVersion -eq 2) 'Hardware driver probing is opt-in'
     # Mock only the OS data source; run the actual collector and CSV serializer.
+    $script:mockAcpiResult = $null
     $oldCimFunction=Get-Item Function:global:Get-CimInstance -ErrorAction SilentlyContinue
     try {
         function global:Get-CimInstance {
-            param([string]$ClassName,[string]$Filter,[int]$OperationTimeoutSec)
+            param([string]$ClassName,[string]$Filter,[int]$OperationTimeoutSec,[string]$Namespace)
             switch ($ClassName) {
                 'Win32_PerfFormattedData_PerfOS_Processor' { return [pscustomobject]@{PercentProcessorTime=37} }
                 'Win32_OperatingSystem' { return [pscustomobject]@{FreePhysicalMemory=8388608;TotalVisibleMemorySize=33554432} }
                 'Win32_PerfFormattedData_PerfOS_Memory' { return [pscustomobject]@{CommittedBytes=4294967296;CommitLimit=34359738368;PoolNonpagedBytes=134217728;PoolPagedBytes=268435456;PagesPersec=4} }
                 'Win32_PerfFormattedData_PerfDisk_PhysicalDisk' { return [pscustomobject]@{Name='_Total';CurrentDiskQueueLength=2;DiskReadBytesPersec=1024;DiskWriteBytesPersec=2048;PercentDiskTime=3} }
+                'MSAcpi_ThermalZoneTemperature' { return $script:mockAcpiResult }
                 default { throw "Unexpected fixture class: $ClassName" }
             }
         }
+        $script:mockAcpiResult = $null
         $metrics=Get-CMTelemetry $temp $root $cfg ([pscustomobject]@{BootKey='fixture'})
         Assert-CM ($metrics.CpuUsagePct -eq 37 -and $metrics.RamAvailableMB -eq 8192 -and $metrics.RamUsedPct -eq 75 -and $metrics.CommittedMB -eq 4096) 'Actual telemetry collector converts CIM memory units and CPU correctly'
         Assert-CM ($metrics.ErrorsJson -eq '[]' -and $metrics.TemperatureStatus -eq 'NOT_MEASURED' -and $metrics.DiskQueueLength -eq 2) 'Collector records unavailable temperature honestly and preserves disk queue'
         Write-CMTelemetry $temp $metrics
         $roundtrip=Import-Csv (Join-Path $temp 'Evidence/Logs/telemetry-v2.csv') -Delimiter ';'
         Assert-CM ($roundtrip.CpuUsagePct -eq '37' -and $roundtrip.RamUsedPct -eq '75' -and $roundtrip.BootKey -eq 'fixture') 'Actual telemetry collector roundtrips through the fixed CSV schema'
+
+        # Deterministic ACPI thermal zone unit test using mocked CIM
+        $script:mockAcpiResult = [pscustomobject]@{ CurrentTemperature=3052; CriticalTripPoint=3922; InstanceName='ACPI\ThermalZone\TZ00_0' }
+        $acpiMetrics = Get-CMTelemetry $temp $root $cfg ([pscustomobject]@{BootKey='fixture'})
+        Assert-CM ($acpiMetrics.TemperatureStatus -eq 'ACPI_WMI') 'Collector sets ACPI_WMI status when ACPI thermal zone is active'
+        $acpiJson = $acpiMetrics.HardwareSensorsJson | ConvertFrom-Json
+        Assert-CM ($acpiJson.ThermalZoneTemp -eq 32.0 -and $acpiJson.CriticalTripPoint -eq 119.0 -and $acpiJson.Source -eq 'MSAcpi_ThermalZoneTemperature') 'Collector converts ACPI tenths-of-kelvin to Celsius correctly'
     } finally {
         Remove-Item Function:global:Get-CimInstance -ErrorAction SilentlyContinue
         if ($oldCimFunction) { Set-Item Function:global:Get-CimInstance $oldCimFunction.ScriptBlock }
@@ -115,6 +125,8 @@ try {
     }
     try {
         for ($i=0;$i -lt 350;$i++) { Write-CMTelemetry $temp $metrics }
+        $tempTestPath = Join-Path $temp 'Evidence/Logs/temperatures.csv'
+        [IO.File]::WriteAllLines($tempTestPath, @('"Utc";"Local";"NVMe_NAND_C";"NVMe_Controller_C";"HDD_C";"Status";"Alert"','"2026-10-12T00:00:00Z";"2026-10-12T03:00:00+03:00";"45";"50";"35";"OK";""'))
         $fixtureBoot=[pscustomobject]@{BootKey='AAAAAAAAAAAAAAAAAAAAAAAA';BootUtc=$boot.ToString('o')}
         New-CMIncident -Root $temp -Config $cfg -Boot $fixtureBoot -Events @($event,$whea)
         $incident=Join-Path $temp 'Evidence/Incidents/AAAAAAAAAAAAAAAAAAAAAAAA'
@@ -122,6 +134,7 @@ try {
         Assert-CM ($report.Classification.Type -eq 'Bugcheck' -and $report.BootEvents.Count -eq 2) 'Actual incident builder preserves classification and event data'
         $csvTail=@(Import-Csv (Join-Path $incident 'telemetry-v2.csv') -Delimiter ';')
         Assert-CM ($csvTail.Count -eq 300 -and $csvTail[-1].RamAvailableMB -eq '8192') 'Incident CSV tail includes its header and 300 readable samples'
+        Assert-CM (Test-Path (Join-Path $incident 'temperatures.csv')) 'Incident builder includes dedicated temperatures.csv in evidence package'
         $complete=Read-CMJson (Join-Path $incident 'complete.json')
         Assert-CM ($complete.ExportErrors.Count -eq 1) 'Failed EVTX export is explicitly recorded, not reported as successful'
         $before=(Get-FileHash (Join-Path $incident 'report.json')).Hash

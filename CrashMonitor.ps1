@@ -36,7 +36,7 @@ function Stop-Collector {
             $killer=Start-Process -FilePath (Join-Path $env:SystemRoot 'System32/taskkill.exe') -ArgumentList @('/PID',[string]$p.Id,'/T','/F') -WindowStyle Hidden -PassThru
             try { if (-not $killer.WaitForExit(5000)) { $killer.Kill() } } finally { $killer.Dispose() }
         }
-    } finally { $p.Dispose() }
+    } catch { } finally { try { $p.Dispose() } catch { } }
 }
 try {
     Remove-Item -LiteralPath (Join-Path $state 'stop.request') -Force -ErrorAction SilentlyContinue

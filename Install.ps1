@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 [CmdletBinding()]
 param([string]$RootPath='C:\CrashMonitor', [switch]$EnableCrashDumps, [switch]$DisableAutoReboot, [switch]$NoStart)
 $ErrorActionPreference='Stop'
@@ -35,7 +35,7 @@ if (Test-Path -LiteralPath $manifestPath) {
 Import-Module (Join-Path $source 'Modules/Common.psm1')
 $config=Get-CMConfig $RootPath $source
 $allScripts=@(Get-ChildItem (Join-Path $source 'Scripts') -Filter '*.ps1' -ErrorAction SilentlyContinue | ForEach-Object { "Scripts/$($_.Name)" })
-$files=@('CrashMonitor.ps1','Worker.ps1','Install.ps1','NightlyLogCleanup.ps1','RegisterNightlyTask.ps1','README.md','TODO.md','Config/defaults-v2.json','Modules/Common.psm1','Modules/EventCapture.psm1','Modules/TelemetryV2.psm1','Modules/Diagnostics.psm1','Modules/VoltageMonitor.psm1','Tests/Test-Self.ps1','Tests/Test-Windows.ps1') + $allScripts
+$files=@('CrashMonitor.ps1','Worker.ps1','Install.ps1','NightlyLogCleanup.ps1','RegisterNightlyTask.ps1','README.md','TODO.md','.gitattributes','.gitignore','Config/defaults-v2.json','Modules/Common.psm1','Modules/EventCapture.psm1','Modules/TelemetryV2.psm1','Modules/Diagnostics.psm1','Modules/VoltageMonitor.psm1','Tests/Test-Self.ps1','Tests/Test-Windows.ps1') + $allScripts
 if (Test-Path -LiteralPath $manifestPath) { $files+= 'manifest.json' }
 $backup=Join-Path $RootPath ('Backups/v2-'+[datetime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
 [void][IO.Directory]::CreateDirectory($backup)
@@ -49,7 +49,7 @@ if (Test-Path -LiteralPath (Split-Path -Parent $stop)) {
     [IO.File]::WriteAllText($stop,[datetime]::UtcNow.ToString('o'))
     Start-Sleep -Seconds 6
 }
-if ($task) { Stop-ScheduledTask -TaskName 'CrashMonitor_AutoStart' -ErrorAction Stop }
+if ($task -and $task.State -eq 'Running') { Stop-ScheduledTask -TaskName 'CrashMonitor_AutoStart' -ErrorAction SilentlyContinue }
 if ($legacyCleanup) { Stop-ScheduledTask -TaskName 'CrashMonitor_NightlyCleanup' -ErrorAction SilentlyContinue; Disable-ScheduledTask -TaskName 'CrashMonitor_NightlyCleanup' | Out-Null }
 foreach ($relative in $files + @('Config/config.json')) {
     $target=Join-Path $RootPath $relative
@@ -60,10 +60,24 @@ foreach ($relative in $files + @('Config/config.json')) {
     }
 }
 $toolsDir=Join-Path $RootPath 'Tools'
-if (Test-Path -LiteralPath $toolsDir) {
+$toolsSrc=Join-Path $source 'Tools'
+$toolsNeedBackup = $false
+if ((Test-Path -LiteralPath $toolsDir) -and ($source.TrimEnd('\') -ne $RootPath) -and (Test-Path -LiteralPath $toolsSrc)) {
+    $srcFiles = @(Get-ChildItem -Path $toolsSrc -Recurse -File)
+    foreach ($sf in $srcFiles) {
+        $rel = $sf.FullName.Substring($toolsSrc.Length)
+        $destFile = Join-Path $toolsDir $rel
+        if (-not (Test-Path -LiteralPath $destFile)) { $toolsNeedBackup = $true; break }
+        $df = Get-Item -LiteralPath $destFile
+        if ($df.Length -ne $sf.Length -or (Get-FileHash -LiteralPath $df.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $sf.FullName -Algorithm SHA256).Hash) {
+            $toolsNeedBackup = $true; break
+        }
+    }
+}
+if ($toolsNeedBackup) {
     $toolsBackup=Join-Path $backup 'Tools'
     [void][IO.Directory]::CreateDirectory($toolsBackup)
-    Copy-Item -Path "$toolsDir\*" -Destination $toolsBackup -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -Path "$toolsDir\*" -Destination $toolsBackup -Recurse -Force
 }
 if ($source.TrimEnd('\') -ne $RootPath) {
     foreach ($relative in $files) {
@@ -74,7 +88,12 @@ if ($source.TrimEnd('\') -ne $RootPath) {
     $toolsSrc=Join-Path $source 'Tools'
     if (Test-Path -LiteralPath $toolsSrc) {
         [void][IO.Directory]::CreateDirectory($toolsDir)
-        Copy-Item -Path "$toolsSrc\*" -Destination $toolsDir -Recurse -Force -ErrorAction SilentlyContinue
+        try {
+            Copy-Item -Path "$toolsSrc\*" -Destination $toolsDir -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-Error "Failed to copy Tools binaries into $toolsDir. A file might be locked by a running process: $_"
+            throw
+        }
     }
 }
 $config.SchemaVersion=2

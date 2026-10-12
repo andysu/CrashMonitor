@@ -173,17 +173,20 @@ function Limit-CMCsvLog {
         }
         if ($splitIdx -gt 1) {
             $tempPath = $Path + '.trim.tmp'
-            $writer = [IO.File]::CreateText($tempPath)
             try {
-                $writer.WriteLine($header)
-                for ($j = $splitIdx; $j -lt $lines.Length; $j++) {
-                    $writer.WriteLine($lines[$j])
+                $writer = [IO.File]::CreateText($tempPath)
+                try {
+                    $writer.WriteLine($header)
+                    for ($j = $splitIdx; $j -lt $lines.Length; $j++) {
+                        $writer.WriteLine($lines[$j])
+                    }
+                } finally {
+                    $writer.Dispose()
                 }
+                [void][IO.File]::Copy($tempPath, $Path, $true)
             } finally {
-                $writer.Dispose()
+                if ([IO.File]::Exists($tempPath)) { [void][IO.File]::Delete($tempPath) }
             }
-            [void][IO.File]::Copy($tempPath, $Path, $true)
-            [void][IO.File]::Delete($tempPath)
         }
     }
 }

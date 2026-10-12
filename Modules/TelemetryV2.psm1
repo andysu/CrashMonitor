@@ -95,6 +95,7 @@ function Get-CMTelemetry {
         Write-CMLog $Root 'telemetry' "ERROR: Storage probe write failure: $_" 'ERROR'
     }
     $row.TemperatureStatus='NOT_MEASURED'
+    $hardwareSensorsLogged = $false
     if ($Config.EnableHardwareSensors) {
         try {
             Import-Module (Join-Path $CodeRoot 'Modules/VoltageMonitor.psm1') -Force
@@ -102,8 +103,10 @@ function Get-CMTelemetry {
             $row.HardwareSensorsJson=$sensors | ConvertTo-Json -Compress
             if ($sensors.CpuTemp -ne 'N/A' -or $sensors.DiskTemp -ne 'N/A' -or $sensors.RawSummary -match 'Temperature') {
                 $row.TemperatureStatus = 'OK'
+                $hardwareSensorsLogged = $true
             } elseif ($sensors.RawSummary) {
                 $row.TemperatureStatus = 'SENSORS_ACTIVE'
+                $hardwareSensorsLogged = $true
             } else {
                 $errors.Add('Hardware sensors returned no actual values')
             }
@@ -152,6 +155,49 @@ function Get-CMTelemetry {
                 Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/temperatures.csv') -Columns @('Utc','Local','NVMe_NAND_C','NVMe_Controller_C','HDD_C','Status','Alert') -Row $tempRow
             } catch { }
         } catch { $errors.Add("Hardware sensors: $_") }
+    }
+
+    # Safe WMI ACPI ThermalZone fallback when hardware sensors are disabled or unavailable
+    if (-not $hardwareSensorsLogged) {
+        try {
+            $tz = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -OperationTimeoutSec 3 -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($tz -and $tz.CurrentTemperature -gt 2732) {
+                $acpiTemp = [math]::Round(($tz.CurrentTemperature - 2732) / 10.0, 1)
+                $critTemp = $null
+                if ($tz.CriticalTripPoint -gt 2732) {
+                    $critTemp = [math]::Round(($tz.CriticalTripPoint - 2732) / 10.0, 1)
+                }
+                $row.TemperatureStatus = 'ACPI_WMI'
+                $acpiData = [ordered]@{
+                    Source = 'MSAcpi_ThermalZoneTemperature'
+                    ThermalZoneTemp = $acpiTemp
+                    CriticalTripPoint = $critTemp
+                    Instance = $tz.InstanceName
+                }
+                $row.HardwareSensorsJson = ConvertTo-Json -InputObject $acpiData -Compress
+                
+                $tempAlert = ''
+                if ($acpiTemp -ge 70.0) {
+                    $tempAlert = 'HIGH_TEMP'
+                    $alertMsg = "High ACPI thermal zone temperature: ${acpiTemp}C >= 70C"
+                    $errors.Add($alertMsg)
+                    Write-CMLog $Root 'telemetry' "CRITICAL: $alertMsg" 'WARNING'
+                }
+                
+                try {
+                    $tempRow = [ordered]@{
+                        Utc = $now.UtcDateTime.ToString('o')
+                        Local = $now.ToString('o')
+                        NVMe_NAND_C = $null
+                        NVMe_Controller_C = $null
+                        HDD_C = $null
+                        Status = 'ACPI_WMI'
+                        Alert = $tempAlert
+                    }
+                    Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/temperatures.csv') -Columns @('Utc','Local','NVMe_NAND_C','NVMe_Controller_C','HDD_C','Status','Alert') -Row $tempRow
+                } catch { }
+            }
+        } catch { }
     }
     $row.ErrorsJson=ConvertTo-Json -InputObject @($errors.ToArray()) -Compress
     $row.DurationMs=$timer.ElapsedMilliseconds

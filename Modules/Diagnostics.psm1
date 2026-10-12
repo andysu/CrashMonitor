@@ -108,7 +108,7 @@ function New-CMIncident {
         $source=Join-Path $Root "Evidence/Events/$safe/$($ev.RecordId)-$stamp.xml"
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $xmlDir "$safe-$($ev.RecordId)-$stamp.xml") -Force }
     }
-    foreach ($name in @('telemetry-v2.csv','heartbeat-v2.csv','events.jsonl','supervisor.log','events.log','telemetry.log')) {
+    foreach ($name in @('telemetry-v2.csv','heartbeat-v2.csv','temperatures.csv','events.jsonl','supervisor.log','events.log','telemetry.log')) {
         $path=Join-Path $Root "Evidence/Logs/$name"
         if (Test-Path -LiteralPath $path) {
             # Bounded tails keep report generation independent of months of logs.
@@ -148,6 +148,7 @@ function Export-CMDiagnostics {
     Write-CMJson (Join-Path $dir 'manifest.json') @{ CapturedUtc=[datetime]::UtcNow.ToString('o'); Files=$manifest; FullHistory=[bool]$FullHistory; Note='Live snapshot: individual logs may advance during copying. Memory dumps and legacy logs are not copied.' }
     $zip="$dir.zip"
     Compress-Archive -LiteralPath $dir -DestinationPath $zip -CompressionLevel Optimal -ErrorAction Stop
+    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     return $zip
 }
 Export-ModuleMember -Function Invoke-CMNative, Get-CMInventory, Export-CMEvtx, New-CMIncident, Export-CMDiagnostics

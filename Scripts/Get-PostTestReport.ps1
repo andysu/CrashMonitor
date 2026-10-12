@@ -1,6 +1,13 @@
 ﻿#Requires -Version 5.1
+param([string]$RootPath = 'C:\CrashMonitor')
+
 Write-Output '=== POST-TEST MONITOR STATUS ==='
-& 'C:\CrashMonitor\Scripts\Get-MonitorStatus.ps1' -RootPath 'C:\CrashMonitor'
+$statusScript = Join-Path $PSScriptRoot 'Get-MonitorStatus.ps1'
+if (Test-Path -LiteralPath $statusScript) {
+    & $statusScript -RootPath $RootPath
+} else {
+    Write-Warning "Get-MonitorStatus.ps1 not found at $statusScript"
+}
 
 Write-Output '=== CURRENT CPU & RAM ==='
 $cpu = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
@@ -19,4 +26,13 @@ if ($whea) {
 }
 
 Write-Output '=== LATEST 3 TEMPERATURE ROWS ==='
-Import-Csv 'C:\CrashMonitor\Evidence\Logs\temperatures.csv' -Delimiter ';' | Select-Object -Last 3 | Format-Table
+$tempCsv = Join-Path $RootPath 'Evidence/Logs/temperatures.csv'
+if (Test-Path -LiteralPath $tempCsv) {
+    $header = Get-Content -LiteralPath $tempCsv -TotalCount 1
+    $tail = @(Get-Content -LiteralPath $tempCsv -Tail 3)
+    if ($tail.Count) {
+        ConvertFrom-Csv -InputObject (@($header) + $tail) -Delimiter ';' | Format-Table
+    }
+} else {
+    Write-Output "No temperatures.csv found at $tempCsv"
+}
