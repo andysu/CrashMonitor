@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 [CmdletBinding()]
 param()
 $ErrorActionPreference='Stop'
@@ -49,6 +49,19 @@ try {
     Assert-CM ((Get-CMRestartClassification @($request) $boot $boot.AddMinutes(-10)).Type -eq 'RequestedRestart') 'Previous boot timestamp is handled as a nullable DateTime'
     $lateRequest=ConvertFrom-CMEventXml (New-Fixture 1074 'User32' '2026-10-07T10:00:00Z')
     Assert-CM ((Get-CMRestartClassification @($lateRequest) $boot).Type -eq 'Unknown') 'Old unrelated restart request does not classify a later boot'
+    # Server incident 5AFB1E3BB2112A6D5D9F0D90: powered off from Settings at 21:30:30 UTC, started 7 h later.
+    $offBoot=[datetime]::Parse('2026-10-13T04:33:49.8392009Z').ToUniversalTime()
+    $user32={ param($utc,$process,$type,$account,$record) ConvertFrom-CMEventXml (New-Fixture 1074 'User32' $utc "<Data Name=`"param1`">$process</Data><Data Name=`"param2`">RESWIN</Data><Data Name=`"param3`">Інше (незаплановане)</Data><Data Name=`"param4`">0x0</Data><Data Name=`"param5`">$type</Data><Data Name=`"param6`"></Data><Data Name=`"param7`">$account</Data>" $record) }
+    $kg={ param($id,$utc,$record) ConvertFrom-CMEventXml (New-Fixture $id 'Microsoft-Windows-Kernel-General' $utc '' $record) }
+    $log6006={ param($utc,$record) ConvertFrom-CMEventXml (New-Fixture 6006 'EventLog' $utc '' $record) }
+    $olderSession=@((& $user32 '2026-10-12T18:31:46.9124338Z' 'wininit.exe (127.0.0.1)' 'перезапустити' 'NT AUTHORITY\SYSTEM' 200), (& $log6006 '2026-10-12T18:31:48.9695409Z' 201), (& $kg 13 '2026-10-12T18:31:54.2054730Z' 202), (& $kg 12 '2026-10-12T18:32:26.8312483Z' 203))
+    $lastSession=@((& $user32 '2026-10-12T21:30:30.0901323Z' 'C:\Windows\system32\SystemSettingsAdminFlows.exe (RESWIN)' 'Вимкнення живлення' 'RESWIN\res' 300), (& $log6006 '2026-10-12T21:30:33.6577307Z' 301), (& $kg 13 '2026-10-12T21:30:38.8534002Z' 302), (& $kg 12 '2026-10-13T04:33:49.8392009Z' 303))
+    $offClass=Get-CMRestartClassification ($olderSession + $lastSession) $offBoot
+    Assert-CM ($offClass.Type -eq 'RequestedShutdown' -and $offClass.Explanation -match 'SystemSettingsAdminFlows' -and $offClass.Explanation -match 'RESWIN\\res' -and $offClass.Explanation -match 'Вимкнення живлення' -and $offClass.Explanation -match '423\.2 min') 'A clean power-off followed by a start hours later is RequestedShutdown with process, account and type'
+    Assert-CM ((Get-CMRestartClassification $olderSession $offBoot).Type -eq 'Unknown') 'A shutdown request from an older session (an OS start followed it) does not classify this boot'
+    Assert-CM ((Get-CMRestartClassification @($lastSession[0], $lastSession[3]) $offBoot).Type -eq 'Unknown') 'A shutdown request without a completed stop (no 6006 or Kernel-General 13) stays Unknown'
+    $offReset=ConvertFrom-CMEventXml (New-Fixture 41 'Microsoft-Windows-Kernel-Power' '2026-10-13T04:33:52Z' '<Data Name="BugcheckCode">0</Data>' 304)
+    Assert-CM ((Get-CMRestartClassification ($lastSession + $offReset) $offBoot).Type -eq 'UnexpectedReset') 'Unexpected-shutdown evidence on this boot outranks an earlier clean shutdown'
     $bug=ConvertFrom-CMEventXml (New-Fixture 1001 'Microsoft-Windows-WER-SystemErrorReporting' '2026-10-07T12:00:10Z')
     Assert-CM ((Get-CMRestartClassification @($bug) $boot).Type -eq 'Bugcheck') 'WER stop-error event confirms bugcheck without Kernel-Power data'
     $wheaXml=New-Fixture 1 'Microsoft-Windows-WHEA-Logger' '2026-10-07T12:00:04Z' '<Data Name="RawData">435045520001</Data>' 124
@@ -371,6 +384,8 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         $report=Read-CMJson (Join-Path $incident 'report.json')
         Assert-CM ($report.Classification.Type -eq 'Bugcheck' -and $report.BootEvents.Count -eq 2) 'Actual incident builder preserves classification and event data'
         Assert-CM ($null -ne $report.PreCrashMetrics) 'Incident builder computes and includes PreCrashMetrics in report.json'
+        $reportBytes=[IO.File]::ReadAllBytes((Join-Path $incident 'report.txt'))
+        Assert-CM ($reportBytes.Length -gt 3 -and $reportBytes[0] -eq 0xEF -and $reportBytes[1] -eq 0xBB -and $reportBytes[2] -eq 0xBF) 'report.txt is UTF-8 with BOM, so Windows PowerShell 5.1 and Notepad show Ukrainian event text correctly'
         $csvTail=@(Import-Csv (Join-Path $incident 'telemetry-v2.csv') -Delimiter ';')
         Assert-CM ($csvTail.Count -eq 300 -and $csvTail[-1].RamAvailableMB -eq '8192') 'Incident CSV tail includes its header and 300 readable samples'
         Assert-CM (Test-Path (Join-Path $incident 'temperatures.csv')) 'Incident builder includes dedicated temperatures.csv in evidence package'

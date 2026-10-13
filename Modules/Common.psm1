@@ -235,6 +235,35 @@ function Get-CMRestartClassification {
             Explanation='User32 recorded a shutdown/restart request. Inspect its process, account and reason; this does not establish whether every shutdown stage completed.'
         }
     }
+    # A complete clean shutdown of the previous session, however long the machine then stayed off: a User32 1074
+    # request followed by the event log (6006) or the kernel (Kernel-General 13) stopping, with no OS start in between.
+    # Server, 2026-10-12 21:30 UTC: powered off from Settings and started 7 h later; this used to fall through to Unknown.
+    # Unclean evidence (41/6008) and bugchecks are handled above and always take precedence.
+    $previousStart = [datetime]::MinValue
+    foreach ($ev in @($Events | Where-Object { $_.Provider -eq 'Microsoft-Windows-Kernel-General' -and [int]$_.EventId -eq 12 })) {
+        $t = ConvertTo-CMUtcDate $ev.Utc
+        if ($t -lt $BootUtc.AddSeconds(-10) -and $t -gt $previousStart) { $previousStart = $t }
+    }
+    if ($null -ne $PreviousBootUtc) { $prev = ([datetime]$PreviousBootUtc).ToUniversalTime(); if ($prev -lt $BootUtc.AddSeconds(-10) -and $prev -gt $previousStart) { $previousStart = $prev } }
+    $request = @($Events | Where-Object { $_.Provider -eq 'User32' -and [int]$_.EventId -eq 1074 } | Where-Object { $t = ConvertTo-CMUtcDate $_.Utc; $t -gt $previousStart -and $t -lt $BootUtc } | Sort-Object { ConvertTo-CMUtcDate $_.Utc }) | Select-Object -Last 1
+    if ($request) {
+        $requestUtc = ConvertTo-CMUtcDate $request.Utc
+        $stops = @($Events | Where-Object { ($_.Provider -eq 'EventLog' -and [int]$_.EventId -eq 6006) -or ($_.Provider -eq 'Microsoft-Windows-Kernel-General' -and [int]$_.EventId -eq 13) } | ForEach-Object { ConvertTo-CMUtcDate $_.Utc } | Where-Object { $_ -ge $requestUtc -and $_ -lt $BootUtc } | Sort-Object)
+        if ($stops.Count) {
+            $osStop = $stops[-1]
+            # User32 1074: param1 process, param3 reason, param5 shutdown type, param7 account (texts are in the OS language).
+            $data = $request.Data
+            $explanation = "Clean shutdown of the previous session: requested by $(Get-CMValue $data 'param1' '?') (account $(Get-CMValue $data 'param7' '?')), type '$(Get-CMValue $data 'param5' '?')', reason '$(Get-CMValue $data 'param3' '?')'. Windows stopped at $($osStop.ToString('o')) and started again $([math]::Round(($BootUtc - $osStop).TotalMinutes, 1)) min later; no unexpected-shutdown evidence."
+            return [pscustomobject]@{
+                Type='RequestedShutdown'
+                BugcheckCode=$null
+                PowerButtonTimestamp=0L
+                LongPowerButtonPressDetected='false'
+                SleepInProgress=0
+                Explanation=$explanation
+            }
+        }
+    }
     return [pscustomobject]@{
         Type='Unknown'
         BugcheckCode=$null

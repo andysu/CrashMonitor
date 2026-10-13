@@ -494,7 +494,8 @@ function New-CMIncident {
     $lines+=@('','Events (UTC / provider / ID / message):')
     $lines+=@($Events | Sort-Object Utc | ForEach-Object { "$($_.Utc) | $($_.Provider) | $($_.EventId) | $($_.Message)" })
     $lines+=@('','Limits:')+$report.Limitations
-    [IO.File]::WriteAllLines((Join-Path $dir 'report.txt'),[string[]]$lines,(New-Object Text.UTF8Encoding($false)))
+    # With a BOM: Windows PowerShell 5.1 Get-Content and Notepad otherwise read the UTF-8 text as the ANSI code page.
+    [IO.File]::WriteAllLines((Join-Path $dir 'report.txt'),[string[]]$lines,(New-Object Text.UTF8Encoding($true)))
 
     # Each event in report.json includes EventData; full XML is copied independently.
     $xmlDir=Join-Path $dir 'XML'; [void][IO.Directory]::CreateDirectory($xmlDir)
