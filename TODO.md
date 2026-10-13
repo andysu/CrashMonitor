@@ -98,6 +98,6 @@
   - [x] **2.2** Тест диференційного бекапу `Tools/`: бекап створюється лише при фактичній зміні файлів.
   - [x] **2.3** Тест реєстрації задачі `CrashMonitor_AutoStart` через моки `Register-ScheduledTask` / `New-ScheduledTaskAction` (без реального створення задачі).
   - [x] **2.4** Інтегрувати тести в `Tests\Test-Self.ps1` (логіку винесено у функції `Install.ps1`, тести завантажують їх через AST), 81/81 у PowerShell 5.1 та 7; оновлено `manifest.json` і `README.md`. Повний прогін `Install.ps1` не виконувався (потребує адміністратора та змінює систему).
-- [ ] **3. Склад `manifest.json`:**
-  - [ ] **3.1** Узгодити, чи включати `.gitattributes` та `.gitignore` у manifest, з огляду на те, що `Install.ps1` їх копіює (рішення за користувачем). Окремо: у manifest відсутні всі файли `Tools/LibreHardwareMonitor/` (включно з драйвером `.sys`), які використовує `VoltageMonitor.psm1`.
-  - [ ] **3.2** Привести `manifest.json` / `Install.ps1` у відповідність до рішення; перевірити всі хеші.
+- [x] **3. Склад `manifest.json`:**
+  - [x] **3.1** Рішення користувача: включити `.gitattributes`, `.gitignore` та всі файли `Tools/LibreHardwareMonitor/` (включно з драйвером `.sys`). `README.md` і `TODO.md` до manifest не входять.
+  - [x] **3.2** `manifest.json` розширено з 33 до 57 файлів (`Install.ps1` без змін); усі хеші збігаються, підміна байта в `LibreHardwareMonitor.sys` зупиняє інсталяцію з `Package checksum mismatch`; 81/81 самотестів.

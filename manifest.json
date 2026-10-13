@@ -1,10 +1,20 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-12T21:25:42Z",
+    "GeneratedUtc":  "2026-10-13T07:25:36Z",
     "GitCommit":  null,
-    "FileCount":  33,
+    "FileCount":  57,
     "Files":  [
+                  {
+                      "Path":  ".gitattributes",
+                      "SizeBytes":  287,
+                      "Sha256":  "8b84162ea44d9a3a8c19d70684b29e2e1a9b775bc0a80374539b779a1c421126"
+                  },
+                  {
+                      "Path":  ".gitignore",
+                      "SizeBytes":  317,
+                      "Sha256":  "fb3b319cd142f25a5bf778d9e631501ed8ac0af9d971f03c509ebfacb282a1d6"
+                  },
                   {
                       "Path":  "Config/config.json",
                       "SizeBytes":  812,
@@ -124,6 +134,116 @@
                       "Path":  "Tests/Test-Windows.ps1",
                       "SizeBytes":  2134,
                       "Sha256":  "d2a61795521ae3dfc222aa787745f8f2632b36bd07515ab1745bdd96e745e219"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/Aga.Controls.dll",
+                      "SizeBytes":  146944,
+                      "Sha256":  "c5fdf080cce883d702ebb6660b9a4fef6b2d17ce3e4d2c785dd66a969cf67cac"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/Aga.Controls.pdb",
+                      "SizeBytes":  556544,
+                      "Sha256":  "7c0574a4270ab68b315e92ac7f182237b8de0a9ceb0189abbf25a1748e86350d"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/de/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  9728,
+                      "Sha256":  "6909a1c134d0285fba2422a40ea0e65c1f0ca3c3ef2b94a1166015af2a87780f"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/es/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  10240,
+                      "Sha256":  "e893c6907da8d68c03b1a10e68b554ad5a8c0533f15912106f32e925f2beabf0"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/fr/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  10240,
+                      "Sha256":  "e3ee50e08124a7603be7d996dcf596eb0d3f9c603768e86e003f7b942d7097f3"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/HidSharp.dll",
+                      "SizeBytes":  242608,
+                      "Sha256":  "8c58e5fba22acc751032dfe97ce633e4f8a4c96089749bf316d55283b36649c2"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/it/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  10240,
+                      "Sha256":  "1d0493e38d8b3fcc7efa4916fea1eea69ee6449bf435e1869c1bc3f54d4090c5"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/LibreHardwareMonitor.exe",
+                      "SizeBytes":  1197056,
+                      "Sha256":  "2811fa3cf6da248afd46032d8407f5466c011f6b814ba3d24a178a161e4259d3"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/LibreHardwareMonitor.exe.config",
+                      "SizeBytes":  176,
+                      "Sha256":  "ad8267122c40d37dcd9d99e1412d763187a1825732f378db8867f3ecf675cf70"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/LibreHardwareMonitor.sys",
+                      "SizeBytes":  14544,
+                      "Sha256":  "11bd2c9f9e2397c9a16e0990e4ed2cf0679498fe0fd418a3dfdac60b5c160ee5"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/LibreHardwareMonitorLib.dll",
+                      "SizeBytes":  666624,
+                      "Sha256":  "a24c7cbb3d6ca12950e570fbad82778a87c87311cde6218914a283a2c0a04e19"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/LibreHardwareMonitorLib.pdb",
+                      "SizeBytes":  161188,
+                      "Sha256":  "139824062a36eae0aa689f01191f093693841b1fb904b8eda0b80ddc1eb5cdb4"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/LibreHardwareMonitorLib.xml",
+                      "SizeBytes":  128120,
+                      "Sha256":  "c1e06433777089ea685b45a927914fa9478a38099ebafbba69865eeafd26b9af"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/Microsoft.Win32.TaskScheduler.dll",
+                      "SizeBytes":  333824,
+                      "Sha256":  "74fe1a6a1e36be7d893e31bbb4d4bd83bf4b927e715276cd5607982139818ebd"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/Newtonsoft.Json.dll",
+                      "SizeBytes":  711952,
+                      "Sha256":  "e1e27af7b07eeedf5ce71a9255f0422816a6fc5849a483c6714e1b472044fa9d"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/OxyPlot.dll",
+                      "SizeBytes":  676864,
+                      "Sha256":  "7628a1595d0caabe0a2a042079ea53e15608af49096c175a1d5e7f93fc0ea8f8"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/OxyPlot.WindowsForms.dll",
+                      "SizeBytes":  32256,
+                      "Sha256":  "57bb97dd3053d9849490721b2e1f671e28062c5b416d45e8d447f8180dca19ed"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/pl/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  10240,
+                      "Sha256":  "6e58d86c42b61226dd7af35d7c9432ce6f0982d1d0d5a2f4120e8abc5c787a02"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/ru/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  10752,
+                      "Sha256":  "1a1d5fdac027144bcaa0e8110f4de717e80944420c59708b3dd8e2bd31bc7ed4"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/System.CodeDom.dll",
+                      "SizeBytes":  30984,
+                      "Sha256":  "e8c88b0448083663910587efeacb6a1977749fe3ffe83b263fc01f7b63d7dfd2"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/zh-CN/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  9728,
+                      "Sha256":  "aafbe48966dbc5372a308ab9501245ce261d2715f336ad1908c799d354c981a2"
+                  },
+                  {
+                      "Path":  "Tools/LibreHardwareMonitor/zh-Hant/Microsoft.Win32.TaskScheduler.resources.dll",
+                      "SizeBytes":  9728,
+                      "Sha256":  "f8c769a357e6cd27452835e5288fe515fb50bfeec83ef3969975171174b467e5"
                   },
                   {
                       "Path":  "Tools/OpenHardwareMonitor/Aga.Controls.dll",
