@@ -214,6 +214,13 @@ ST1000DM010-2EP102_Temperature_Temperature:32
             Assert-CM ($noSeagate.Hdd -eq 34) 'temperatures.csv records any HDD vendor when no ST1000 is present'
             Assert-CM ((@((Get-CMSensorAlerts $amd).Keys) -join ',') -eq 'Nuvoton_NCT6798D_Temperature_Temperature_3,Nuvoton_NCT6798D_Temperature_Temperature_6') 'Unwired Super I/O inputs alert until they are listed in IgnoredTemperatureSensors'
             Assert-CM (@((Get-CMSensorAlerts $amd @('*NCT6798D_Temperature_Temperature_3','*NCT6798D_Temperature_Temperature_6')).Keys).Count -eq 0) 'IgnoredTemperatureSensors silences only the listed inputs'
+            $packetRoot=Join-Path $temp 'packet'
+            Write-CMJson (Join-Path $packetRoot 'Evidence/State/hardware-event-counts.json') @{ BootKey='BOOTP'; Whea=2; Storage=5; Thermal=1 }
+            $packetRow=[ordered]@{ Utc='2026-10-13T10:00:00.0000000Z'; BootKey='BOOTP'; CpuUsagePct=12; RamUsedPct=80; RamAvailableMB=2048; DiskQueueLength=0; IoLatencyMs=4; TemperatureStatus='OK'; HardwareSensorsJson=($amd | ConvertTo-Json -Compress) }
+            $packet=New-CMTelemetryPacket -Row $packetRow -Root $packetRoot
+            Assert-CM ($packet.Type -eq 'telemetry' -and $packet.CpuTempC -eq 37 -and $packet.CpuPowerW -eq 10.455 -and $packet.Vcore -eq 1.175 -and $packet.FanRpm -eq 1221 -and -not $packet.Contains('Plus12V') -and $packet.Whea -eq 2 -and $packet.StorageErrors -eq 5 -and $packet.ThermalEvents -eq 1) 'Remote telemetry packet carries CPU temperature/power, Vcore, fan and per-boot hardware event counts; N/A rails are omitted'
+            $packetRow.BootKey='OTHER'
+            Assert-CM (-not (New-CMTelemetryPacket -Row $packetRow -Root $packetRoot).Contains('Whea')) 'Hardware event counts from another boot are not sent'
             $watchAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Scripts/Watch-LiveSensors.ps1'),[ref]$null,[ref]$null)
             . ([scriptblock]::Create(($watchAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CMFanSummary' },$false) | Select-Object -First 1).Extent.Text))
             Assert-CM ((Get-CMFanSummary $intel.RawSummary) -eq 'Fan2 1321 RPM' -and (Get-CMFanSummary $amd.RawSummary) -eq 'Fan2 1221 RPM') 'Watch-LiveSensors shows spinning fans in RPM and skips PWM control percentages'
@@ -387,6 +394,53 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         Remove-Item Function:global:Get-PhysicalDisk,Function:global:Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
         Remove-Variable CMTestCounters,CMTestStorageDisks -Scope Global -ErrorAction SilentlyContinue
     }
+
+    # Hardware event counters for the remote packet: per boot, only hardware signals, history before the boot ignored.
+    $countRoot=Join-Path $temp 'counts'
+    $countBoot=[pscustomobject]@{ BootKey='BOOTC'; BootUtc='2026-10-13T08:00:00Z' }
+    $countEvents=@(
+        [pscustomobject]@{ Provider='Microsoft-Windows-WHEA-Logger'; Channel='System'; Level=3; EventId=19; Utc='2026-10-13T09:00:00Z' },
+        [pscustomobject]@{ Provider='Microsoft-Windows-WHEA-Logger'; Channel='System'; Level=3; EventId=19; Utc='2026-10-13T07:00:00Z' },
+        [pscustomobject]@{ Provider='Microsoft-Windows-StorageClassPnP'; Channel='Microsoft-Windows-Storage-ClassPnP/Operational'; Level=2; EventId=500; Utc='2026-10-13T09:01:00Z' },
+        [pscustomobject]@{ Provider='Microsoft-Windows-Ntfs'; Channel='System'; Level=4; EventId=98; Utc='2026-10-13T09:02:00Z' },
+        [pscustomobject]@{ Provider='Microsoft-Windows-Kernel-Processor-Power'; Channel='System'; Level=3; EventId=37; Utc='2026-10-13T09:03:00Z' })
+    Update-CMHardwareEventCounts -Root $countRoot -Boot $countBoot -Events $countEvents
+    Update-CMHardwareEventCounts -Root $countRoot -Boot $countBoot -Events @($countEvents[0])
+    $countState=Read-CMJson (Join-Path $countRoot 'Evidence/State/hardware-event-counts.json')
+    Assert-CM ($countState.Whea -eq 2 -and $countState.Storage -eq 1 -and $countState.Thermal -eq 1) 'Hardware event counters add WHEA, storage and throttling events of this boot only'
+    Update-CMHardwareEventCounts -Root $countRoot -Boot ([pscustomobject]@{ BootKey='NEXT'; BootUtc='2026-10-13T10:00:00Z' }) -Events @()
+    Assert-CM ((Read-CMJson (Join-Path $countRoot 'Evidence/State/hardware-event-counts.json')).Whea -eq 0) 'Hardware event counters restart on a new boot'
+
+    # Remote heartbeat receiver: pure state logic, then a real UDP loopback run of Scripts/Receive-Heartbeat.ps1.
+    $receiverPath=Join-Path $root 'Scripts/Receive-Heartbeat.ps1'
+    $receiverAst=[Management.Automation.Language.Parser]::ParseFile($receiverPath,[ref]$null,[ref]$null)
+    foreach ($fn in @($receiverAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('ConvertFrom-CMHeartbeatPacket','Update-CMHeartbeatState','Test-CMHeartbeatSilence') },$false))) { . ([scriptblock]::Create($fn.Extent.Text)) }
+    $syslogLine='<134>1 2026-10-13T10:00:00.000Z SRV1 CrashMonitor - - - {"SchemaVersion":3,"Type":"hb","Seq":7,"BootKey":"B1","Host":"SRV1"}'
+    $parsedPacket=ConvertFrom-CMHeartbeatPacket $syslogLine
+    Assert-CM ($parsedPacket.Host -eq 'SRV1' -and $parsedPacket.Type -eq 'hb' -and $parsedPacket.Seq -eq 7 -and $null -eq (ConvertFrom-CMHeartbeatPacket 'not a packet') -and $null -eq (ConvertFrom-CMHeartbeatPacket '{"x":1}')) 'Receiver parses syslog-framed CrashMonitor packets and ignores foreign traffic'
+    $rxState=@{}; $t0=[datetime]'2026-10-13T10:00:00Z'
+    $rx=@(Update-CMHeartbeatState $rxState $parsedPacket $t0)
+    $rx+=@(Update-CMHeartbeatState $rxState ([pscustomobject]@{ Host='SRV1'; Type='telemetry'; BootKey='B1'; Utc='2026-10-13T10:00:01Z'; CpuTempC=91; Plus12V=11.2; Whea=3 }) $t0.AddSeconds(1))
+    $rx+=@(Test-CMHeartbeatSilence $rxState $t0.AddSeconds(5) 10)
+    Assert-CM ($rx.Count -eq 0) 'Receiver stays quiet while packets arrive within the silence threshold'
+    $silence=@(Test-CMHeartbeatSilence $rxState $t0.AddSeconds(12) 10) + @(Test-CMHeartbeatSilence $rxState $t0.AddSeconds(20) 10)
+    Assert-CM ($silence.Count -eq 1 -and $silence[0].Event -eq 'SILENCE' -and $silence[0].Detail -match 'CpuTempC=91' -and $silence[0].Detail -match 'Plus12V=11.2' -and $silence[0].Detail -match 'Whea=3') 'Receiver reports SILENCE once with the last readings before the host went quiet'
+    $back=@(Update-CMHeartbeatState $rxState ([pscustomobject]@{ Host='SRV1'; Type='hb'; BootKey='B2' }) $t0.AddSeconds(90))
+    Assert-CM ((@($back | ForEach-Object Event) -join ',') -eq 'RESUMED,REBOOT' -and $back[1].Detail -match 'B1 -> B2') 'Receiver reports RESUMED and REBOOT when packets return with a new BootKey'
+    $udpPort=Get-Random -Minimum 50000 -Maximum 60000
+    $rxDir=Join-Path $temp 'receiver'
+    $receiver=Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$receiverPath`"",'-Port',$udpPort,'-OutputDirectory',"`"$rxDir`"",'-SilenceSeconds','2','-DurationSeconds','7','-BindAddress','127.0.0.1') -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Seconds 3
+        $udpCfg=@{ EnableUdpHeartbeat=$true; UdpHeartbeatHost='127.0.0.1'; UdpHeartbeatPort=$udpPort }
+        Send-CMUdpPacket -Config $udpCfg -Payload ([ordered]@{ SchemaVersion=3; Type='hb'; Seq=1; Utc=[datetime]::UtcNow.ToString('o'); BootKey='LOOP' })
+        Send-CMUdpHeartbeat -Config $udpCfg -Row ([ordered]@{ Utc=[datetime]::UtcNow.ToString('o'); BootKey='LOOP'; CpuUsagePct=3 })
+        [void]$receiver.WaitForExit(15000)
+    } finally { if (-not $receiver.HasExited) { $receiver.Kill() } }
+    $rxHost=[Environment]::MachineName -replace '[^A-Za-z0-9_.-]','_'
+    $rxRows=@(Import-Csv (Join-Path $rxDir "heartbeat-$rxHost.csv") -Delimiter ';' -ErrorAction SilentlyContinue)
+    $rxEvents=@(Import-Csv (Join-Path $rxDir 'heartbeat-events.csv') -Delimiter ';' -ErrorAction SilentlyContinue)
+    Assert-CM ($rxRows.Count -eq 2 -and $rxRows[0].Type -eq 'hb' -and $rxRows[1].Type -eq 'telemetry' -and $rxRows[1].BootKey -eq 'LOOP' -and @($rxEvents | Where-Object Event -eq 'SILENCE').Count -eq 1) 'Monitor packets reach Receive-Heartbeat.ps1 over UDP loopback and silence is recorded'
 
     # Install.ps1 helpers: load only the function definitions via the AST; the installer itself never runs.
     $installAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Install.ps1'),[ref]$null,[ref]$null)

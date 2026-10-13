@@ -44,6 +44,24 @@ function Write-CMLog {
     Add-CMText -Path (Join-Path $Root "Evidence/Logs/$Role.log") -Text "[$([datetime]::UtcNow.ToString('o'))] [$Level] $Message"
 }
 
+function Send-CMUdpPacket {
+    # Remote evidence survives a power loss that local disks may not. RFC 5424 syslog framing lets any syslog
+    # collector (router, NAS) store the packet; Scripts/Receive-Heartbeat.ps1 reads the JSON body.
+    param([hashtable]$Config, [System.Collections.IDictionary]$Payload)
+    if (-not $Config -or -not (Get-CMValue $Config 'EnableUdpHeartbeat' $false) -or -not (Get-CMValue $Config 'UdpHeartbeatHost')) { return }
+    try {
+        $port = 514
+        if ([int](Get-CMValue $Config 'UdpHeartbeatPort' 0) -gt 0) { $port = [int]$Config.UdpHeartbeatPort }
+        $hostName = [Environment]::MachineName
+        $Payload['Host'] = $hostName
+        # <134> = facility local0, severity informational.
+        $message = "<134>1 $([datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')) $hostName CrashMonitor - - - $(ConvertTo-Json -InputObject $Payload -Compress)"
+        $bytes = [Text.Encoding]::UTF8.GetBytes($message)
+        $client = New-Object Net.Sockets.UdpClient
+        try { [void]$client.Send($bytes, $bytes.Length, [string]$Config.UdpHeartbeatHost, $port) } finally { $client.Dispose() }
+    } catch { }
+}
+
 function Invoke-CMFileLock {
     param([string]$Path, [scriptblock]$Action)
     $sha=[Security.Cryptography.SHA256]::Create()

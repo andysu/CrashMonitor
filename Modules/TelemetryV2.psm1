@@ -294,38 +294,51 @@ function Get-CMTelemetry {
     return $row
 }
 
-function Send-CMUdpHeartbeat {
-    param([hashtable]$Config, [System.Collections.IDictionary]$Row)
-    if (-not $Config -or -not $Config.ContainsKey('EnableUdpHeartbeat') -or -not $Config.EnableUdpHeartbeat -or -not $Config.UdpHeartbeatHost) { return }
-    try {
-        $port = 514
-        if ($Config.ContainsKey('UdpHeartbeatPort') -and [int]$Config.UdpHeartbeatPort -gt 0) { $port = [int]$Config.UdpHeartbeatPort }
-        $packet = [ordered]@{
-            SchemaVersion = 2
-            Utc = $Row.Utc
-            BootKey = $Row.BootKey
-            CpuPct = $Row.CpuUsagePct
-            RamPct = $Row.RamUsedPct
-            RamAvailMB = $Row.RamAvailableMB
-            DiskQLen = $Row.DiskQueueLength
-            IoLatencyMs = $Row.IoLatencyMs
-            TempStatus = $Row.TemperatureStatus
-        }
-        $json = ConvertTo-Json -InputObject $packet -Compress
-        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
-        $client = New-Object Net.Sockets.UdpClient
+$script:UdpSequence = 0L
+function New-CMTelemetryPacket {
+    # The last values a remote receiver holds if this machine dies: load, hardware sensors and hardware event counts.
+    param([System.Collections.IDictionary]$Row, [string]$Root = '')
+    $script:UdpSequence++
+    $packet = [ordered]@{
+        SchemaVersion = 3; Type = 'telemetry'; Seq = $script:UdpSequence; Utc = $Row.Utc; BootKey = $Row.BootKey
+        CpuPct = $Row.CpuUsagePct; RamPct = $Row.RamUsedPct; RamAvailMB = $Row.RamAvailableMB
+        DiskQLen = $Row.DiskQueueLength; IoLatencyMs = $Row.IoLatencyMs; TempStatus = $Row.TemperatureStatus
+    }
+    if ($Row.HardwareSensorsJson) {
         try {
-            [void]$client.Send($bytes, $bytes.Length, [string]$Config.UdpHeartbeatHost, $port)
-        } finally {
-            $client.Dispose()
-        }
-    } catch { }
+            $sensors = $Row.HardwareSensorsJson | ConvertFrom-Json
+            foreach ($map in @(@('CpuTempC','CpuTemp'),@('CpuPowerW','CpuPower'),@('Vcore','Vcore'),@('Plus12V','Plus12V'),@('Plus5V','Plus5V'),@('Plus33V','Plus33V'),@('DiskTempC','DiskTemp'),@('ThermalZoneC','ThermalZoneTemp'))) {
+                $value = [string](Get-CMValue $sensors $map[1] '')
+                $value = $value.TrimEnd('W')
+                $number = 0.0
+                if ($value -and [double]::TryParse($value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) { $packet[$map[0]] = $number }
+            }
+            # First spinning fan; Control_Fan_N is the PWM duty in %, not a speed.
+            foreach ($m in [regex]::Matches([string]$sensors.RawSummary, '_Fan_Fan_\d+:(\d+(?:\.\d+)?)')) {
+                $rpm = [double]::Parse($m.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+                if ($rpm -gt 0) { $packet['FanRpm'] = [math]::Round($rpm); break }
+            }
+        } catch { }
+    }
+    if ($Root) {
+        try {
+            $counts = Read-CMJson (Join-Path $Root 'Evidence/State/hardware-event-counts.json')
+            if ($counts -and $counts.BootKey -eq $Row.BootKey) { $packet['Whea'] = $counts.Whea; $packet['StorageErrors'] = $counts.Storage; $packet['ThermalEvents'] = $counts.Thermal }
+        } catch { }
+    }
+    return $packet
+}
+
+function Send-CMUdpHeartbeat {
+    param([hashtable]$Config, [System.Collections.IDictionary]$Row, [string]$Root = '')
+    if (-not $Config -or -not (Get-CMValue $Config 'EnableUdpHeartbeat' $false)) { return }
+    try { Send-CMUdpPacket -Config $Config -Payload (New-CMTelemetryPacket -Row $Row -Root $Root) } catch { }
 }
 
 function Write-CMTelemetry {
     param([string]$Root, [System.Collections.IDictionary]$Row, [hashtable]$Config = $null)
     Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/telemetry-v2.csv') -Columns $script:Columns -Row $Row
-    if ($Config) { Send-CMUdpHeartbeat -Config $Config -Row $Row }
+    if ($Config) { Send-CMUdpHeartbeat -Config $Config -Row $Row -Root $Root }
 }
 
 function Close-CMTelemetrySensor {
@@ -336,4 +349,4 @@ function Close-CMTelemetrySensor {
     } catch { }
 }
 
-Export-ModuleMember -Function Get-CMTelemetryColumns, Initialize-CMTelemetry, Get-CMStorageTemperatures, Get-CMSensorAlerts, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor
+Export-ModuleMember -Function Get-CMTelemetryColumns, Initialize-CMTelemetry, Get-CMStorageTemperatures, Get-CMSensorAlerts, New-CMTelemetryPacket, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor

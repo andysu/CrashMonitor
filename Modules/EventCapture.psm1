@@ -137,6 +137,38 @@ function Receive-CMEvents {
     return $all.ToArray()
 }
 
+function Get-CMHardwareEventCategory {
+    # Groups captured events for the counters sent in the remote telemetry packet; $null = not a hardware signal.
+    param($Record)
+    $provider = [string]$Record.Provider; $channel = [string]$Record.Channel; $level = [int]$Record.Level
+    if ($provider -eq 'Microsoft-Windows-WHEA-Logger' -or $channel -eq 'Microsoft-Windows-Kernel-WHEA/Errors') { return 'Whea' }
+    if ($channel -eq 'Microsoft-Windows-Kernel-Power/Thermal-Operational' -or ($provider -eq 'Microsoft-Windows-Kernel-Processor-Power' -and [int]$Record.EventId -eq 37)) { return 'Thermal' }
+    if ($channel -eq 'Microsoft-Windows-Storage-ClassPnP/Operational') { return 'Storage' }
+    if ($provider -in @('disk','stornvme','storahci','storport','Ntfs','Microsoft-Windows-Ntfs') -and $level -ge 1 -and $level -le 3) { return 'Storage' }
+    return $null
+}
+
+function Update-CMHardwareEventCounts {
+    # Per-boot counters kept in State so the telemetry worker can include them in every remote packet.
+    param([string]$Root, $Boot, [object[]]$Events)
+    $path = Join-Path $Root 'Evidence/State/hardware-event-counts.json'
+    $counts = $null
+    try { $counts = Read-CMJson $path } catch { }
+    $reset = (-not $counts -or $counts.BootKey -ne $Boot.BootKey)
+    if ($reset) { $counts = [pscustomobject]@{ BootKey=$Boot.BootKey; Whea=0; Storage=0; Thermal=0 } }
+    $bootUtc = [datetime]::Parse($Boot.BootUtc).ToUniversalTime()
+    $added = 0
+    foreach ($ev in @($Events)) {
+        $category = Get-CMHardwareEventCategory $ev
+        if (-not $category) { continue }
+        # Backfilled history from before this boot belongs to earlier boots.
+        if ([datetime]::Parse($ev.Utc).ToUniversalTime() -lt $bootUtc) { continue }
+        $counts.$category = [int]$counts.$category + 1
+        $added++
+    }
+    if ($added -or $reset) { Write-CMJson $path @{ BootKey=$counts.BootKey; Whea=[int]$counts.Whea; Storage=[int]$counts.Storage; Thermal=[int]$counts.Thermal; UpdatedUtc=[datetime]::UtcNow.ToString('o') } }
+}
+
 function Get-CMBootEvents {
     param([string]$Root, $Boot)
     # Read the actual boot interval directly; not a historic event near the previous heartbeat.
@@ -159,4 +191,4 @@ function Get-CMBootEvents {
     return $result.ToArray()
 }
 
-Export-ModuleMember -Function ConvertFrom-CMEventXml, Get-CMEventXPath, Get-CMEventChannels, Save-CMEvent, Receive-CMEvents, Get-CMBootEvents
+Export-ModuleMember -Function ConvertFrom-CMEventXml, Get-CMEventXPath, Get-CMEventChannels, Save-CMEvent, Receive-CMEvents, Get-CMHardwareEventCategory, Update-CMHardwareEventCounts, Get-CMBootEvents

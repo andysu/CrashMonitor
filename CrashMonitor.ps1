@@ -95,6 +95,8 @@ try {
                 BootKey=$boot.BootKey; MonitorSessionId=$sessionId; Sequence=$sequence; MonotonicMs=$clock.ElapsedMilliseconds
             }
             $lastHeartbeat=$clock.ElapsedMilliseconds
+            # The remote receiver treats silence of these packets as the moment the machine stopped.
+            Send-CMUdpPacket -Config $config -Payload ([ordered]@{ SchemaVersion=3; Type='hb'; Seq=$sequence; Utc=$now.UtcDateTime.ToString('o'); BootKey=$boot.BootKey; MonitorSessionId=$sessionId })
             $health=@{ Utc=$now.UtcDateTime.ToString('o'); Boot=$boot; SupervisorPid=$PID; MonitorSessionId=$sessionId; HeartbeatSequence=$sequence; Workers=@{} }
             foreach ($role in $workers.Keys) {
                 $status=$null

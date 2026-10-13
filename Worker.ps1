@@ -45,7 +45,8 @@ try {
             if ($drive.AvailableFreeSpace -lt ([long]$config.MinFreeSpaceMB*1MB)) { throw "Low free space: less than $($config.MinFreeSpaceMB) MB. Collection paused; heartbeat continues." }
             if ($Role -eq 'telemetry') { Write-CMTelemetry $RootPath (Get-CMTelemetry $RootPath $codeRoot $config $boot) $config }
             else {
-                [void](Receive-CMEvents $RootPath $config $boot)
+                $received=@(Receive-CMEvents $RootPath $config $boot)
+                try { Update-CMHardwareEventCounts -Root $RootPath -Boot $boot -Events $received } catch { Write-CMLog $RootPath $Role "Hardware event counters not updated: $_" 'WARNING' }
                 # Storage health runs here, not in the telemetry loop: a snapshot can take seconds and must not open gaps in telemetry.
                 $storageDue=$incidentPending -or (($clock.ElapsedMilliseconds-$lastStorage) -ge ($storageIntervalMinutes*60000))
                 $storageChanges=@()

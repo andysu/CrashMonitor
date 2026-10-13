@@ -1,9 +1,9 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T09:48:44Z",
+    "GeneratedUtc":  "2026-10-13T09:55:23Z",
     "GitCommit":  null,
-    "FileCount":  61,
+    "FileCount":  62,
     "Files":  [
                   {
                       "Path":  ".gitattributes",
@@ -27,8 +27,8 @@
                   },
                   {
                       "Path":  "CrashMonitor.ps1",
-                      "SizeBytes":  8437,
-                      "Sha256":  "62aa49a72a0754e7c7cdcb776e7702d9d2debe67dff9c15cf6356277d3ef6fda"
+                      "SizeBytes":  8740,
+                      "Sha256":  "0905c55811f4f140c5c52ffba358493458737f28e0f9724630cd0563d9555952"
                   },
                   {
                       "Path":  "Install.ps1",
@@ -37,8 +37,8 @@
                   },
                   {
                       "Path":  "Modules/Common.psm1",
-                      "SizeBytes":  25871,
-                      "Sha256":  "57b59059cc9520c27a240edd85dd8e5eb0a153c2f756035aa0a66cf799f3c5c7"
+                      "SizeBytes":  27045,
+                      "Sha256":  "6df923b19b75bcbca115ba49d64aae667e33d0e2a2d8318f820148115914a1e9"
                   },
                   {
                       "Path":  "Modules/Diagnostics.psm1",
@@ -47,13 +47,13 @@
                   },
                   {
                       "Path":  "Modules/EventCapture.psm1",
-                      "SizeBytes":  11004,
-                      "Sha256":  "6f50560550a2970f6a2c034f746bdb88a3fee90d90ee2750b67e569e36602ff4"
+                      "SizeBytes":  13124,
+                      "Sha256":  "1ac5c60acb928e259ec9a1fa3be063b82096533c5e409138259bbb258443b0c4"
                   },
                   {
                       "Path":  "Modules/TelemetryV2.psm1",
-                      "SizeBytes":  18183,
-                      "Sha256":  "6e2532abd9b313cfaae434e9f4fa77f15fcd8a441a8c4b310232fc00d8d50817"
+                      "SizeBytes":  19487,
+                      "Sha256":  "1c256b9ac017b8b9ef8c8d3c5b01eb9d8d3c2050ecd70f6318d38ee1fa80b620"
                   },
                   {
                       "Path":  "Modules/VoltageMonitor.psm1",
@@ -106,6 +106,11 @@
                       "Sha256":  "34915196bf3a37b1a2e7b2187e70f2678394ded343a7340ad906e25ad4e488ca"
                   },
                   {
+                      "Path":  "Scripts/Receive-Heartbeat.ps1",
+                      "SizeBytes":  7190,
+                      "Sha256":  "28464a095063df9ddb0c1f53de9fe57363f6c3fef50ceae1b8ce70656784e997"
+                  },
+                  {
                       "Path":  "Scripts/Stop-Monitor.ps1",
                       "SizeBytes":  239,
                       "Sha256":  "1194444426b8860fcb322b391d0073bda4164ef995597428be586f9b5e3b1ae4"
@@ -132,8 +137,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  50590,
-                      "Sha256":  "279f69cebcdbce381e64812c518e5af4ae543a1f906cf14fa93acfc70aa797bc"
+                      "SizeBytes":  57364,
+                      "Sha256":  "a0923efd5da3d6bc97bcca119f15c37fb193ccac0e2e760af24b6e71e1374f1b"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
@@ -307,8 +312,8 @@
                   },
                   {
                       "Path":  "Worker.ps1",
-                      "SizeBytes":  4924,
-                      "Sha256":  "9bc1dd1c4846592538f9a456f61e1989e5b44ed8b23acd338d47037d73ac59ef"
+                      "SizeBytes":  5119,
+                      "Sha256":  "3c74853be5331b1ba8c4628a384f849185e80583480c79ecc41b43be45fe8c76"
                   }
               ]
 }

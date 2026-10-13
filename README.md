@@ -105,6 +105,7 @@ CrashMonitor v2 — це автономний комплекс монітори�
 - [`Watch-LiveSensors.ps1`](Scripts/Watch-LiveSensors.ps1) — консольний монітор реального часу. В одному рядку виводить навантаження процесора, його температуру на кристалі, енергоспоживання (W), напругу `Vcore`, оберти кулера (RPM), оперативну пам'ять, температури NVMe SSD (NAND і контролер), температуру HDD та статус тестів.
 - [`Get-MonitorStatus.ps1`](Scripts/Get-MonitorStatus.ps1) — швидка перевірка працездатності: показує PID супервізора, стан воркерів (Waiting/Collecting), послідовність heartbeat та повертає `PASS`/`FAIL`.
 - [`Stop-Monitor.ps1`](Scripts/Stop-Monitor.ps1) — безпечна та штатна зупинка монітора через запит `stop.request` без ризику пошкодження відкритих файлів. Потребує прав адміністратора: звичайні користувачі не мають права запису в `RootPath`.
+- [`Receive-Heartbeat.ps1`](Scripts/Receive-Heartbeat.ps1) — **приймач віддаленого пульсу для іншого комп'ютера** (див. «Зовнішній запис пульсу»). Самодостатній: копіюється одним файлом, модулі CrashMonitor не потрібні.
 - [`Update-Manifest.ps1`](Scripts/Update-Manifest.ps1) — перегенеровує `manifest.json` (розмір і SHA-256) за фіксованим правилом складу пакета. Корінь проекту визначає сам (батьківська тека `Scripts/`), інший шлях задається `-RootPath`. Якщо змін немає, файл не перезаписується. Режим `-Check` нічого не записує, виводить `ADDED`/`CHANGED`/`REMOVED` і повертає код виходу 1 при розбіжності.
 - [`Export-Diagnostics.ps1`](Scripts/Export-Diagnostics.ps1) — створює діагностичний ZIP-пакет у папці `Exports/` для передачі на аналіз фахівцям.
 - [`Invoke-SystemStressTest.ps1`](Scripts/Invoke-SystemStressTest.ps1) — комплексний сценарій стрес-тестування системи (диски + пам'ять + CPU) для провокації збою під контролем CrashMonitor.
@@ -122,7 +123,7 @@ CrashMonitor v2 — це автономний комплекс монітори�
 ---
 
 ### 4. Автоматизоване тестування (`Tests/`)
-- [`Test-Self.ps1`](Tests/Test-Self.ps1) — **121 вбудований самотест** (24 перевірки синтаксису PowerShell-файлів + 97 функціональних тестів; кількість перевірок синтаксису зростає разом із кількістю скриптів у `Scripts/`). Перевіряє синтаксис усіх скриптів у проекті, парсинг XML/WHEA, класифікацію BugCheck, розбір прапорців Event 41 (кнопка живлення, сну), порівняння лічильників SMART, розрахунок метрик збою, механізми ротації, атомарну заміну файлів `[IO.File]::Replace`, блокування файлів, цілісність CSV та логіку ковзного вікна `Limit-CMCsvLog`. Не потребує зовнішніх залежностей.
+- [`Test-Self.ps1`](Tests/Test-Self.ps1) — **131 вбудований самотест** (25 перевірок синтаксису PowerShell-файлів + 106 функціональних тестів; кількість перевірок синтаксису зростає разом із кількістю скриптів у `Scripts/`). Перевіряє синтаксис усіх скриптів у проекті, парсинг XML/WHEA, класифікацію BugCheck, розбір прапорців Event 41 (кнопка живлення, сну), порівняння лічильників SMART, розрахунок метрик збою, механізми ротації, атомарну заміну файлів `[IO.File]::Replace`, блокування файлів, цілісність CSV та логіку ковзного вікна `Limit-CMCsvLog`. Не потребує зовнішніх залежностей.
   - Тести інсталятора: функції `Assert-CMPackageManifest` (перевірка SHA-256 за `manifest.json`, нормалізація LF/CRLF, відмова при зміненому/відсутньому файлі та path traversal), `Test-CMToolsChanged` (диференційний бекап `Tools/`) і `Register-CMAutoStartTask` (параметри задачі `CrashMonitor_AutoStart`) завантажуються з `Install.ps1` через AST-парсер, без запуску інсталятора. Командлети ScheduledTasks підміняються моками, тому реальна задача не створюється і не змінюється.
   - Тести датчиків на двох вбудованих наборах: серверному (Intel i5-9400 / NCT6796D / Samsung 980 / ST1000) з еталонними значеннями, знятими з коду до додавання AMD, і реальному знімку AMD Ryzen 3 3200G / ASUS TUF GAMING A520M-PLUS II. Драйвер не потрібен: об'єкт читання датчиків підміняється.
   - Тести `Scripts/Update-Manifest.ps1` на тимчасовому пакеті: склад (без `*.md` та `Evidence/`), збереження `Package`/`Version`/`GitCommit`, сумісність з `Assert-CMPackageManifest`, відсутність перезапису без змін, `-Check` з кодом виходу 1/0.
@@ -303,6 +304,32 @@ Start-ScheduledTask -TaskName "CrashMonitor_AutoStart"
 
 ---
 
+## Зовнішній запис пульсу
+
+Під час раптового скидання або втрати живлення останні секунди локальних журналів можуть не потрапити на диск. Запис на іншому пристрої цього не залежить.
+
+**Що надсилає сервер** (UDP, формат syslog RFC 5424 з JSON у тілі — його приймає і будь-який syslog-сервер роутера чи NAS):
+- `hb` — від супервізора кожні `HeartbeatIntervalSeconds` (2 с): `Seq`, `BootKey`. Його зникнення — момент зупинки системи; воркери тут ні до чого.
+- `telemetry` — від воркера телеметрії кожен замір: CPU %, RAM, черга й затримка диска, `CpuTempC`, `CpuPowerW`, `Vcore`, `Plus12V`/`Plus5V`/`Plus33V` (якщо відомі), `FanRpm`, `DiskTempC`, а також лічильники апаратних подій від старту системи: `Whea`, `StorageErrors` (диск/NTFS/контролери, ClassPnP), `ThermalEvents` (тротлінг, температурні події). Лічильники веде воркер подій у `Evidence/State/hardware-event-counts.json`.
+
+**На комп'ютері-приймачі** (Windows, PowerShell 5.1+): скопіювати `Scripts/Receive-Heartbeat.ps1` і запустити:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Receive-Heartbeat.ps1 -Port 514 -OutputDirectory D:\HeartbeatLogs -SilenceSeconds 10
+```
+Вхідний UDP на цей порт має дозволити брандмауер приймача (від адміністратора, один раз):
+```powershell
+New-NetFirewallRule -DisplayName 'CrashMonitor heartbeat' -Direction Inbound -Protocol UDP -LocalPort 514 -Action Allow
+```
+Результат: `heartbeat-<сервер>.csv` — кожен пакет; `heartbeat-events.csv` — `SILENCE` (пакети зникли; з останніми показниками), `RESUMED`, `REBOOT` (змінився `BootKey`).
+
+**На сервері** у `C:\CrashMonitor\Config\config.json` (від адміністратора) і перезапуск монітора:
+```json
+"EnableUdpHeartbeat": true,
+"UdpHeartbeatHost": "<IP приймача>",
+"UdpHeartbeatPort": 514,
+```
+
+---
 ## Публікація в новий Git-репозиторій
 
 Якщо ви створюєте новий репозиторій або клонуєте проєкт на чисту систему:
