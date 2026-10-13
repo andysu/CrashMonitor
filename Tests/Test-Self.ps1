@@ -228,7 +228,23 @@ try {
     $installAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Install.ps1'),[ref]$null,[ref]$null)
     $installFunctions=@($installAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] },$false))
     foreach ($fn in $installFunctions) { . ([scriptblock]::Create($fn.Extent.Text)) }
-    Assert-CM ((@($installFunctions.Name) -join ',') -eq 'Assert-CMPackageManifest,Test-CMToolsChanged,Register-CMAutoStartTask') 'Install.ps1 exposes testable helper functions'
+    Assert-CM ((@($installFunctions.Name) -join ',') -eq 'Assert-CMPackageManifest,Test-CMToolsChanged,Set-CMRootAcl,Register-CMAutoStartTask') 'Install.ps1 exposes testable helper functions'
+
+    # Root ACL on a temporary tree; the owner keeps WRITE_DAC, so icacls /reset restores access for cleanup.
+    $aclRoot=Join-Path $temp 'acl-root'
+    [void][IO.Directory]::CreateDirectory((Join-Path $aclRoot 'Modules'))
+    [IO.File]::WriteAllText((Join-Path $aclRoot 'Modules/Fixture.psm1'),'fixture')
+    try {
+        Set-CMRootAcl $aclRoot
+        $sidOf={ param($rule) $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+        $rootAcl=Get-Acl -LiteralPath $aclRoot
+        $rootRules=@($rootAcl.Access | ForEach-Object { '{0}={1}' -f (& $sidOf $_),$_.FileSystemRights } | Sort-Object)
+        Assert-CM ($rootAcl.AreAccessRulesProtected -and ($rootRules -join ',') -eq 'S-1-5-18=FullControl,S-1-5-32-544=FullControl,S-1-5-32-545=ReadAndExecute, Synchronize') 'Install root ACL drops inheritance and grants only Administrators, SYSTEM and read-only Users'
+        $writeRights=[Security.AccessControl.FileSystemRights]'WriteData,AppendData,WriteExtendedAttributes,WriteAttributes,Delete,ChangePermissions,TakeOwnership'
+        $fileRules=@((Get-Acl -LiteralPath (Join-Path $aclRoot 'Modules/Fixture.psm1')).Access)
+        $nonAdminWrite=@($fileRules | Where-Object { (& $sidOf $_) -notin @('S-1-5-18','S-1-5-32-544') -and ($_.FileSystemRights -band $writeRights) })
+        Assert-CM ($fileRules.Count -eq 3 -and @($fileRules | Where-Object { -not $_.IsInherited }).Count -eq 0 -and $nonAdminWrite.Count -eq 0) 'Existing package files inherit the root ACL and are not writable by ordinary users'
+    } finally { & icacls.exe $aclRoot /reset /T /C /Q | Out-Null }
 
     $pkg=Join-Path $temp 'package';[void][IO.Directory]::CreateDirectory((Join-Path $pkg 'Modules'))
     $pkgFile=Join-Path $pkg 'Modules/Fixture.psm1'

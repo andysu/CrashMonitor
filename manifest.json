@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T08:05:01Z",
+    "GeneratedUtc":  "2026-10-13T08:17:18Z",
     "GitCommit":  null,
     "FileCount":  58,
     "Files":  [
@@ -32,8 +32,8 @@
                   },
                   {
                       "Path":  "Install.ps1",
-                      "SizeBytes":  9441,
-                      "Sha256":  "6e2221a799ebe1c36adb473d29c19f2fccbe03c178dce3270bb07fe4a1d5c283"
+                      "SizeBytes":  10416,
+                      "Sha256":  "27f38de49165cc31c38e666240e12843a9e0f493e449921c3614702a2ac88fc8"
                   },
                   {
                       "Path":  "Modules/Common.psm1",
@@ -132,8 +132,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  29877,
-                      "Sha256":  "3d14ff0c02ade6e427f5d0b1834b1e01a75c675f23b70d9451fa5bb9b566354c"
+                      "SizeBytes":  31514,
+                      "Sha256":  "031478eb429e2975dac1a0f020b5e22779a308898316caeb26ef11f21b1fa4f8"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",

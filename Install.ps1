@@ -38,6 +38,20 @@ function Test-CMToolsChanged {
     }
     return $false
 }
+function Set-CMRootAcl {
+    # The task runs this code as SYSTEM, so only Administrators and SYSTEM may change it; the inherited C:\ ACL
+    # would let any authenticated user rewrite the scripts. SIDs keep this independent of the OS language.
+    param([string]$Path)
+    $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+    $none=[Security.AccessControl.PropagationFlags]::None
+    $acl=New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($rule in @(@('S-1-5-32-544','FullControl'),@('S-1-5-18','FullControl'),@('S-1-5-32-545','ReadAndExecute'))) {
+        $sid=New-Object Security.Principal.SecurityIdentifier($rule[0])
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,[Security.AccessControl.FileSystemRights]$rule[1],$inherit,$none,'Allow')))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
 function Register-CMAutoStartTask {
     param([string]$RootPath)
     $exe=Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
@@ -131,6 +145,7 @@ try {
         & $wevtutil sl 'Microsoft-Windows-Storage-Storport/Operational' /e:true 2>$null
     }
 } catch { }
+Set-CMRootAcl $RootPath
 Register-CMAutoStartTask $RootPath
 if (-not $NoStart) { Start-ScheduledTask -TaskName 'CrashMonitor_AutoStart' }
 Write-Output "Installed CrashMonitor v2 in $RootPath. Previous code/task configuration: $backup"
