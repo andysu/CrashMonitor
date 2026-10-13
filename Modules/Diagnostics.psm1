@@ -74,17 +74,39 @@ function Get-CMInventory {
 }
 
 function Export-CMEvtx {
-    param([string]$Directory, [Nullable[datetime]]$SinceUtc)
+    param([string]$Directory, [Nullable[datetime]]$SinceUtc, [object[]]$ExtraChannels = @())
     [void][IO.Directory]::CreateDirectory($Directory)
-    foreach ($channel in @('System','Application')) {
-        $dest=Join-Path $Directory "$channel.evtx"
+    # Hardware channels absent on this Windows build are skipped; a failed export of one is reported after the rest are tried.
+    # They are exported with their capture filter: unfiltered, card-reader "no media" errors alone add ~3 MB a day.
+    $sources=@(@{Name='System'},@{Name='Application'}) + @($ExtraChannels | Where-Object { $_.Name -and (Get-WinEvent -ListLog $_.Name -ErrorAction SilentlyContinue) })
+    $extraErrors=@()
+    foreach ($source in $sources) {
+        $channel=[string]$source.Name
+        $safe=$channel -replace '[^a-zA-Z0-9_-]','_'
+        $dest=Join-Path $Directory "$safe.evtx"
         $args=@('epl',$channel,('"{0}"' -f $dest),'/ow:true')
-        if ($null -ne $SinceUtc) {
-            $when=([datetime]$SinceUtc).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-            $args+=('/q:"*[System[TimeCreated[@SystemTime >= ''{0}'']]]"' -f $when)
+        $conditions=@()
+        if ($null -ne $SinceUtc) { $conditions+=("TimeCreated[@SystemTime >= '{0}']" -f ([datetime]$SinceUtc).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')) }
+        if ($source.MaxLevel) { $conditions+=('(' + ((1..[math]::Max(1,[math]::Min(4,[int]$source.MaxLevel)) | ForEach-Object { "Level=$_" }) -join ' or ') + ')') }
+        $query=''
+        if ($conditions.Count) { $query="System[$($conditions -join ' and ')]" }
+        if ($source.EventDataFilter) { $query=(@($query,"EventData[$($source.EventDataFilter)]") | Where-Object { $_ }) -join ' and ' }
+        if ($query) { $args+=('/q:"*[{0}]"' -f $query) }
+        if ($channel -in @('System','Application')) {
+            Invoke-CMNative -FilePath (Join-Path $env:SystemRoot 'System32/wevtutil.exe') -Arguments $args -OutputPrefix (Join-Path $Directory "$safe-export") -TimeoutSeconds 60
+        } else {
+            try { Invoke-CMNative -FilePath (Join-Path $env:SystemRoot 'System32/wevtutil.exe') -Arguments $args -OutputPrefix (Join-Path $Directory "$safe-export") -TimeoutSeconds 60 }
+            catch { $extraErrors+="${channel}: $_" }
         }
-        Invoke-CMNative -FilePath (Join-Path $env:SystemRoot 'System32/wevtutil.exe') -Arguments $args -OutputPrefix (Join-Path $Directory "$channel-export") -TimeoutSeconds 60
     }
+    if ($extraErrors.Count) { throw ('Hardware channel EVTX export failed: ' + ($extraErrors -join '; ')) }
+}
+
+function Get-CMHardwareChannels {
+    param([hashtable]$Config)
+    return @(@(Get-CMValue $Config 'HardwareEventChannels' @()) | ForEach-Object {
+        @{ Name=[string](Get-CMValue $_ 'Name'); MaxLevel=[int](Get-CMValue $_ 'MaxLevel' 4); EventDataFilter=[string](Get-CMValue $_ 'EventDataFilter' '') }
+    } | Where-Object { $_.Name })
 }
 
 function New-CMIncident {
@@ -315,7 +337,7 @@ function New-CMIncident {
     }
     $exportErrors=@()
     $since=[datetime]::Parse($Boot.BootUtc).ToUniversalTime().AddHours(-24)
-    try { Export-CMEvtx -Directory (Join-Path $dir 'EVTX') -SinceUtc $since }
+    try { Export-CMEvtx -Directory (Join-Path $dir 'EVTX') -SinceUtc $since -ExtraChannels (Get-CMHardwareChannels $Config) }
     catch { $exportErrors+= [string]$_; Write-CMLog $Root 'events' "EVTX incident export failed: $_" 'ERROR' }
     Write-CMJson (Join-Path $dir 'complete.json') @{ CompletedUtc=[datetime]::UtcNow.ToString('o'); ExportErrors=$exportErrors; Classification=$classification.Type }
 }
@@ -332,7 +354,7 @@ function Export-CMDiagnostics {
     }
     $since=[datetime]::UtcNow.AddHours(-[double]$Config.EventBackfillHours)
     if ($FullHistory) { $since=$null }
-    Export-CMEvtx -Directory (Join-Path $dir 'EVTX') -SinceUtc $since
+    Export-CMEvtx -Directory (Join-Path $dir 'EVTX') -SinceUtc $since -ExtraChannels (Get-CMHardwareChannels $Config)
     $manifest=@(Get-ChildItem $dir -File -Recurse | ForEach-Object {
         [pscustomobject]@{ Path=$_.FullName.Substring($dir.Length+1); Bytes=$_.Length; SHA256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
     })

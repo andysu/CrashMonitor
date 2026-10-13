@@ -24,14 +24,39 @@ function ConvertFrom-CMEventXml {
 }
 
 function Get-CMEventXPath {
-    param([long]$AfterRecord, [long]$ThroughRecord, [datetime]$SinceUtc, [bool]$Initial, [string]$Channel)
+    param([long]$AfterRecord, [long]$ThroughRecord, [datetime]$SinceUtc, [bool]$Initial, [string]$Channel, [int]$MaxLevel = 4, [string]$EventDataFilter = '')
     $bounds = "EventRecordID > $AfterRecord and EventRecordID <= $ThroughRecord"
     if ($Initial) { $bounds = "TimeCreated[@SystemTime >= '$($SinceUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ'))'] and EventRecordID <= $ThroughRecord" }
     if ($Channel -eq 'System') {
         $filter = "(Level=1 or Level=2 or EventID=1074 or EventID=6005 or EventID=6006 or EventID=6008 or EventID=12 or EventID=13 or EventID=37 or EventID=129 or EventID=153 or EventID=157 or EventID=219 or EventID=2004 or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-Kernel-Power'] or Provider[@Name='Microsoft-Windows-Kernel-Boot'] or Provider[@Name='Microsoft-Windows-Time-Service'] or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='volmgr'])"
+        # Warning/information-level hardware events, bound to their provider so other sources reusing the ID are not captured:
+        # disk 51 paging I/O error; Ntfs 50 delayed write lost, 98 volume check, 140 flush failed; Display 4101 GPU TDR; Kernel-General 1 clock change.
+        # The event log rejects an XPath with more than ~22 OR terms, so these go into a second Select of one QueryList:
+        # Windows returns the union in record order, which keeps the RecordId cursor valid.
+        $hardware = "((Provider[@Name='disk'] and EventID=51) or (Provider[@Name='Ntfs' or @Name='Microsoft-Windows-Ntfs'] and (EventID=50 or EventID=98 or EventID=140)) or (Provider[@Name='Display'] and EventID=4101) or (Provider[@Name='Microsoft-Windows-Kernel-General'] and EventID=1))"
+        $selects = @("*[System[$bounds and $filter]]", "*[System[$bounds and $hardware]]") | ForEach-Object { "<Select Path='System'>$([Security.SecurityElement]::Escape($_))</Select>" }
+        return "<QueryList><Query Id='0' Path='System'>$($selects -join '')</Query></QueryList>"
     } elseif ($Channel -eq 'Application') { $filter = '(Level=1 or Level=2 or EventID=1001 or EventID=2004 or Provider[@Name=''Microsoft-Windows-Resource-Exhaustion-Detector''])' }
-    else { $filter = '(Level=1 or Level=2 or Level=3 or Level=4)' }
+    else { $filter = '(' + ((1..[math]::Max(1,[math]::Min(4,$MaxLevel)) | ForEach-Object { "Level=$_" }) -join ' or ') + ')' }
+    if ($EventDataFilter) { return "*[System[$bounds and $filter] and EventData[$EventDataFilter]]" }
     return "*[System[$bounds and $filter]]"
+}
+
+function Get-CMEventChannels {
+    # System and Application are required; optional and hardware channels are skipped when absent on this Windows build.
+    param([hashtable]$Config)
+    $channels = New-Object Collections.Generic.List[object]
+    $seen = @{}
+    foreach ($name in @('System','Application') + @($Config.OptionalEventChannels)) {
+        if ($name -and -not $seen.ContainsKey($name)) { $seen[$name]=$true; $channels.Add([pscustomobject]@{ Name=[string]$name; MaxLevel=4; EventDataFilter='' }) }
+    }
+    foreach ($entry in @(Get-CMValue $Config 'HardwareEventChannels' @())) {
+        $name = [string](Get-CMValue $entry 'Name')
+        if (-not $name -or $seen.ContainsKey($name)) { continue }
+        $seen[$name]=$true
+        $channels.Add([pscustomobject]@{ Name=$name; MaxLevel=[int](Get-CMValue $entry 'MaxLevel' 4); EventDataFilter=[string](Get-CMValue $entry 'EventDataFilter' '') })
+    }
+    return $channels.ToArray()
 }
 
 function Save-CMEvent {
@@ -56,7 +81,8 @@ function Save-CMEvent {
 function Receive-CMEvents {
     param([string]$Root, [hashtable]$Config, $Boot)
     $all = New-Object Collections.Generic.List[object]
-    foreach ($channel in @('System','Application') + @($Config.OptionalEventChannels)) {
+    foreach ($source in @(Get-CMEventChannels $Config)) {
+        $channel = $source.Name
         $safe = $channel -replace '[^a-zA-Z0-9_-]','_'
         $checkpointPath = Join-Path $Root "Evidence/State/cursor-$safe.json"
         try {
@@ -86,7 +112,7 @@ function Receive-CMEvents {
         $since = [datetime]::UtcNow.AddHours(-[double]$Config.EventBackfillHours)
         $bootStart = [datetime]::Parse($Boot.BootUtc).ToUniversalTime().AddMinutes(-30)
         if ($bootStart -lt $since) { $since = $bootStart }
-        $query = Get-CMEventXPath -AfterRecord $after -ThroughRecord $latest.RecordId -SinceUtc $since -Initial $initial -Channel $channel
+        $query = Get-CMEventXPath -AfterRecord $after -ThroughRecord $latest.RecordId -SinceUtc $since -Initial $initial -Channel $channel -MaxLevel $source.MaxLevel -EventDataFilter $source.EventDataFilter
         $q = New-Object Diagnostics.Eventing.Reader.EventLogQuery($channel, [Diagnostics.Eventing.Reader.PathType]::LogName, $query)
         $reader = New-Object Diagnostics.Eventing.Reader.EventLogReader($q)
         $count = 0; $exhausted = $false; $lastUtc = $null
@@ -120,7 +146,7 @@ function Get-CMBootEvents {
     foreach ($channel in @('System','Application')) {
         $from=$start.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
         $through=$end.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-        $query="*[System[TimeCreated[@SystemTime >= '$from' and @SystemTime <= '$through'] and (EventID=41 or EventID=6008 or EventID=1001 or EventID=1074 or EventID=6006 or EventID=12 or EventID=13 or EventID=46 or EventID=161 or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='disk'] or Provider[@Name='stornvme'] or Provider[@Name='storahci'] or Provider[@Name='storport'])]]"
+        $query="*[System[TimeCreated[@SystemTime >= '$from' and @SystemTime <= '$through'] and (EventID=41 or EventID=6008 or EventID=1001 or EventID=1074 or EventID=6006 or EventID=12 or EventID=13 or EventID=46 or EventID=161 or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='disk'] or Provider[@Name='stornvme'] or Provider[@Name='storahci'] or Provider[@Name='storport'] or (Provider[@Name='Ntfs' or @Name='Microsoft-Windows-Ntfs'] and (EventID=50 or EventID=140)) or (Provider[@Name='Display'] and EventID=4101))]]"
         try {
             foreach ($ev in @(Get-WinEvent -LogName $channel -FilterXPath $query -MaxEvents 2000 -ErrorAction Stop)) {
                 $message=''; try { $message=$ev.Message } catch { }
@@ -133,4 +159,4 @@ function Get-CMBootEvents {
     return $result.ToArray()
 }
 
-Export-ModuleMember -Function ConvertFrom-CMEventXml, Get-CMEventXPath, Save-CMEvent, Receive-CMEvents, Get-CMBootEvents
+Export-ModuleMember -Function ConvertFrom-CMEventXml, Get-CMEventXPath, Get-CMEventChannels, Save-CMEvent, Receive-CMEvents, Get-CMBootEvents

@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T08:33:34Z",
+    "GeneratedUtc":  "2026-10-13T09:08:50Z",
     "GitCommit":  null,
     "FileCount":  58,
     "Files":  [
@@ -22,8 +22,8 @@
                   },
                   {
                       "Path":  "Config/defaults-v2.json",
-                      "SizeBytes":  671,
-                      "Sha256":  "64700856896aac59f02f2a6d6feaf19e21f8c46e316152208f2b8c482e7c8db8"
+                      "SizeBytes":  1220,
+                      "Sha256":  "264afa7db6bf7026de2f26ae2a41b3ee0e3d1f4d839576b993dfbc98276a4f64"
                   },
                   {
                       "Path":  "CrashMonitor.ps1",
@@ -42,13 +42,13 @@
                   },
                   {
                       "Path":  "Modules/Diagnostics.psm1",
-                      "SizeBytes":  22067,
-                      "Sha256":  "50d4ee0d91fc6c4acd54f9ca427319975476330bb319f75b977317409cdc428a"
+                      "SizeBytes":  23916,
+                      "Sha256":  "79ba57f3764e700dd9f2570d42fbafb18ae31ccdc3054181f6fb57c44eb6b68f"
                   },
                   {
                       "Path":  "Modules/EventCapture.psm1",
-                      "SizeBytes":  8520,
-                      "Sha256":  "9cd8577585e40fcb744413e490181ce2cb82e6299474e079b0f1e50ec7057a03"
+                      "SizeBytes":  11004,
+                      "Sha256":  "6f50560550a2970f6a2c034f746bdb88a3fee90d90ee2750b67e569e36602ff4"
                   },
                   {
                       "Path":  "Modules/TelemetryV2.psm1",
@@ -132,8 +132,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  41068,
-                      "Sha256":  "e958129f325112c4269e5f811f12c5d17cf6057f7278a4e94fb3fc528db3b596"
+                      "SizeBytes":  43498,
+                      "Sha256":  "3617797db02ab2df6741d013ccf1b4f498a66b581f07c7729db40c9ac7f630dd"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",

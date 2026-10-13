@@ -63,9 +63,21 @@ try {
     Write-CMJson $checkpoint @{RecordId=43; AnchorUtc='2026-10-07T12:00:01Z'}
     Assert-CM ((Read-CMJson $checkpoint).RecordId -eq 43) 'Checkpoint survives serialization and atomic replacement'
     $query=Get-CMEventXPath 43 99 $boot $false 'System'
-    Assert-CM ($query -match 'EventRecordID > 43' -and $query -match 'EventRecordID <= 99' -and $query -match 'WHEA') 'Incremental query is bounded and includes WHEA'
+    $decoded=[Net.WebUtility]::HtmlDecode($query)
+    Assert-CM ($decoded -match 'EventRecordID > 43' -and $decoded -match 'EventRecordID <= 99' -and $decoded -match 'WHEA') 'Incremental query is bounded and includes WHEA'
     $initial=Get-CMEventXPath 0 99 $boot $true 'System'
     Assert-CM ($initial -match 'TimeCreated' -and $initial -match '2026-10-07T12:00:00.000Z') 'First capture uses UTC backfill'
+    # The real event log engine rejects an XPath with more than ~22 OR terms ("The specified query is invalid"),
+    # so every generated query is validated by Windows itself, not by string matching.
+    $acceptsQuery={ param($q) try { (New-Object Diagnostics.Eventing.Reader.EventLogReader((New-Object Diagnostics.Eventing.Reader.EventLogQuery('System',[Diagnostics.Eventing.Reader.PathType]::LogName,$q)))).Dispose(); $true } catch { $false } }
+    Assert-CM ($query.StartsWith('<QueryList>') -and ([regex]::Matches($query,'<Select ').Count -eq 2) -and $decoded -match "Provider\[@Name='disk'\] and EventID=51" -and $decoded -match 'EventID=140' -and $decoded -match 'EventID=4101' -and (& $acceptsQuery $query) -and (& $acceptsQuery $initial)) 'System query adds disk 51, Ntfs 50/98/140, Display 4101, clock change as a second Select accepted by Windows'
+    $channelCfg=@{ OptionalEventChannels=@('Extra/Operational','Microsoft-Windows-Kernel-WHEA/Errors'); HardwareEventChannels=(Get-CMConfig $temp $root).HardwareEventChannels }
+    $channels=@(Get-CMEventChannels $channelCfg)
+    Assert-CM ((@($channels | ForEach-Object Name) -join ',') -eq 'System,Application,Extra/Operational,Microsoft-Windows-Kernel-WHEA/Errors,Microsoft-Windows-Kernel-WHEA/Operational,Microsoft-Windows-Kernel-Power/Thermal-Operational,Microsoft-Windows-Ntfs/Operational,Microsoft-Windows-Storage-ClassPnP/Operational' -and $channels[3].MaxLevel -eq 4) 'Default hardware channels are read once each, after System, Application and optional channels'
+    $classPnp=$channels | Where-Object Name -eq 'Microsoft-Windows-Storage-ClassPnP/Operational'
+    $classQuery=Get-CMEventXPath 0 99 $boot $false $classPnp.Name $classPnp.MaxLevel $classPnp.EventDataFilter
+    Assert-CM ($classQuery -match '\(Level=1 or Level=2\)' -and $classQuery -notmatch 'Level=3' -and $classQuery -match "SenseKey'\]!='2' or Data\[@Name='AdditionalSenseCode'\]!='58'" -and $classQuery -match "SenseKey'\]!='5'") 'ClassPnP keeps errors but drops card-reader "no media" and unsupported-command noise'
+    Assert-CM (@($channels | Where-Object { $_.Name -notin @('System','Application') } | Where-Object { -not (& $acceptsQuery (Get-CMEventXPath 0 99 $boot $true $_.Name $_.MaxLevel $_.EventDataFilter)) }).Count -eq 0) 'Every hardware channel query is accepted by the Windows event log engine'
     $csv=Join-Path $temp 'roundtrip.csv'
     $row=@{Utc='2026-10-07T12:00:00Z'; Value=1.25; Message="quote `" semi; newline`nsecond line"; Missing=$null}
     $culture=[Threading.Thread]::CurrentThread.CurrentCulture
@@ -246,7 +258,7 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         $script:SavedInventoryFixture=${function:Get-CMInventory}
         $script:SavedExportFixture=${function:Export-CMEvtx}
         function script:Get-CMInventory { return @{Fixture=$true;Errors=@()} }
-        function script:Export-CMEvtx { param($Directory,$SinceUtc); throw 'Fixture: EVTX unavailable on this platform' }
+        function script:Export-CMEvtx { param($Directory,$SinceUtc,$ExtraChannels); throw 'Fixture: EVTX unavailable on this platform' }
     }
     try {
         for ($i=0;$i -lt 350;$i++) { Write-CMTelemetry $temp $metrics }

@@ -20,5 +20,12 @@
   "OptionalEventChannels": [
     "Microsoft-Windows-WindowsUpdateClient/Operational",
     "Microsoft-Windows-Storage-Storport/Operational"
+  ],
+  "HardwareEventChannels": [
+    { "Name": "Microsoft-Windows-Kernel-WHEA/Errors", "MaxLevel": 4 },
+    { "Name": "Microsoft-Windows-Kernel-WHEA/Operational", "MaxLevel": 4 },
+    { "Name": "Microsoft-Windows-Kernel-Power/Thermal-Operational", "MaxLevel": 4 },
+    { "Name": "Microsoft-Windows-Ntfs/Operational", "MaxLevel": 3 },
+    { "Name": "Microsoft-Windows-Storage-ClassPnP/Operational", "MaxLevel": 2, "EventDataFilter": "(Data[@Name='SenseKey']!='2' or Data[@Name='AdditionalSenseCode']!='58') and Data[@Name='SenseKey']!='5'" }
   ]
 }
