@@ -320,6 +320,12 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         $cmpSeagate = Compare-CMSmartSnapshots -CurrentSnapshot $sSeagateCur -PreviousSnapshot $sSeagatePrev -RestartClassification 'UnexpectedReset'
         Assert-CM ($cmpSeagate.PowerLossSuspected -eq $false) 'HDD head parking and spin cycle deltas do not trigger false power loss'
 
+        # SMART: smartctl device names swapped between boots must not be compared as the same disk
+        $swPrev = [pscustomobject]@{ Disks = @([pscustomobject]@{ Device='/dev/sda'; Serial='AAA'; PowerCycles=10; UnsafeShutdowns=5 },[pscustomobject]@{ Device='/dev/sdb'; Serial='BBB'; PowerCycles=100; UnsafeShutdowns=50 }) }
+        $swCur  = [pscustomobject]@{ Disks = @([pscustomobject]@{ Device='/dev/sda'; Serial='BBB'; PowerCycles=100; UnsafeShutdowns=50 },[pscustomobject]@{ Device='/dev/sdb'; Serial='AAA'; PowerCycles=10; UnsafeShutdowns=5 }) }
+        $cmpSwap = Compare-CMSmartSnapshots -CurrentSnapshot $swCur -PreviousSnapshot $swPrev -RestartClassification 'UnexpectedReset'
+        Assert-CM ($cmpSwap.PowerLossSuspected -eq $false -and @($cmpSwap.DiskDeltas | Where-Object { $_.PowerCyclesDelta -ne 0 }).Count -eq 0) 'SMART deltas match disks by serial when smartctl device names change between boots'
+
         # SMART: Clean planned restart skips SMART evaluation
         $cmpClean = Compare-CMSmartSnapshots -CurrentSnapshot $s2 -PreviousSnapshot $s1 -RestartClassification 'RequestedRestart'
         Assert-CM ($cmpClean.Confidence -eq 'NotApplicable' -and $cmpClean.PowerLossSuspected -eq $false) 'Clean planned restart skips SMART delta evaluation'

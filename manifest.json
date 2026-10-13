@@ -1,9 +1,9 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T09:35:01Z",
+    "GeneratedUtc":  "2026-10-13T09:48:44Z",
     "GitCommit":  null,
-    "FileCount":  58,
+    "FileCount":  61,
     "Files":  [
                   {
                       "Path":  ".gitattributes",
@@ -37,8 +37,8 @@
                   },
                   {
                       "Path":  "Modules/Common.psm1",
-                      "SizeBytes":  25394,
-                      "Sha256":  "17d08ec3652ff8bc8356b73fa60d9c40355c56b62bc97b49b65366bbc04f6247"
+                      "SizeBytes":  25871,
+                      "Sha256":  "57b59059cc9520c27a240edd85dd8e5eb0a153c2f756035aa0a66cf799f3c5c7"
                   },
                   {
                       "Path":  "Modules/Diagnostics.psm1",
@@ -132,8 +132,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  49664,
-                      "Sha256":  "d312a1d365d24afe001aaaac3f00275fe0690ec80aeda327b6e9afd28a99bf4e"
+                      "SizeBytes":  50590,
+                      "Sha256":  "279f69cebcdbce381e64812c518e5af4ae543a1f906cf14fa93acfc70aa797bc"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
@@ -289,6 +289,21 @@
                       "Path":  "Tools/RAMMap64.exe",
                       "SizeBytes":  397848,
                       "Sha256":  "e970913798481432cd590991577089e68510b861dc669dcab24feb06aae0df52"
+                  },
+                  {
+                      "Path":  "Tools/smartmontools/COPYING.txt",
+                      "SizeBytes":  18431,
+                      "Sha256":  "189b1af95d661151e054cea10c91b3d754e4de4d3fecfb074c1fb29476f7167b"
+                  },
+                  {
+                      "Path":  "Tools/smartmontools/drivedb.h",
+                      "SizeBytes":  267943,
+                      "Sha256":  "dd39c6a520d38895da61923fe26fe7c9c5eb3f42325f2e4477a06ed7a61966d0"
+                  },
+                  {
+                      "Path":  "Tools/smartmontools/smartctl.exe",
+                      "SizeBytes":  1165312,
+                      "Sha256":  "b5db94e5082c042be44994b7a4fa8f7b5c8e713b2ab1c9a560d8f7a7995ea27d"
                   },
                   {
                       "Path":  "Worker.ps1",

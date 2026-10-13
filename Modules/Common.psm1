@@ -360,6 +360,7 @@ function Get-CMSmartSnapshot {
                         Device = $dev.name
                         Type = $dev.type
                         Model = $devInfo.model_name
+                        Serial = [string]$devInfo.serial_number
                         PowerCycles = $null
                         UnsafeShutdowns = $null
                         PowerOnHours = $null
@@ -439,9 +440,15 @@ function Compare-CMSmartSnapshots {
     foreach ($cur in $CurrentSnapshot.Disks) {
         $identifier = if ($cur.DeviceId) { $cur.DeviceId } else { $cur.Device }
         $prev = $null
-        foreach ($p in $PreviousSnapshot.Disks) {
-            $pId = if ($p.DeviceId) { $p.DeviceId } else { $p.Device }
-            if ($pId -eq $identifier) { $prev = $p; break }
+        # smartctl device names (/dev/sda) can change between boots, e.g. with a USB disk attached: match by serial first.
+        if ($cur.Serial) {
+            foreach ($p in $PreviousSnapshot.Disks) { if ($p.Serial -and $p.Serial -eq $cur.Serial) { $prev = $p; break } }
+        }
+        if (-not $prev) {
+            foreach ($p in $PreviousSnapshot.Disks) {
+                $pId = if ($p.DeviceId) { $p.DeviceId } else { $p.Device }
+                if ($pId -eq $identifier -and -not ($cur.Serial -and $p.Serial -and $p.Serial -ne $cur.Serial)) { $prev = $p; break }
+            }
         }
         if ($prev) {
             $delta = [ordered]@{
