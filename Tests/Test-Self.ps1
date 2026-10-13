@@ -273,5 +273,34 @@ try {
         foreach ($name in $taskMocks) { Remove-Item "Function:global:$name" -ErrorAction SilentlyContinue }
         Remove-Variable CMTestRegisteredTask -Scope Global -ErrorAction SilentlyContinue
     }
+
+    # Scripts/Update-Manifest.ps1 runs on a temporary package; the repository manifest is never touched.
+    $genRoot=Join-Path $temp 'manifest-package'
+    foreach ($d in 'Scripts','Modules','Tools/sub','Evidence/Logs') { [void][IO.Directory]::CreateDirectory((Join-Path $genRoot $d)) }
+    [IO.File]::WriteAllText((Join-Path $genRoot 'Main.ps1'),"'main'`r`n")
+    [IO.File]::WriteAllText((Join-Path $genRoot 'Modules/M.psm1'),"'module'`r`n")
+    [IO.File]::WriteAllText((Join-Path $genRoot 'Tools/sub/t.dll'),'TOOL')
+    [IO.File]::WriteAllText((Join-Path $genRoot '.gitignore'),'Evidence/')
+    [IO.File]::WriteAllText((Join-Path $genRoot 'README.md'),'docs')
+    [IO.File]::WriteAllText((Join-Path $genRoot 'Evidence/Logs/telemetry-v2.csv'),'runtime')
+    $genManifestPath=Join-Path $genRoot 'manifest.json'
+    [IO.File]::WriteAllText($genManifestPath,'{"Package":"Fixture","Version":"9.9.9","GitCommit":"abc123","Files":[]}')
+    $updateScript=Join-Path $root 'Scripts/Update-Manifest.ps1'
+    & $updateScript -RootPath $genRoot | Out-Null
+    $genManifest=Get-Content -LiteralPath $genManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-CM ((@($genManifest.Files | ForEach-Object { $_.Path }) -join ',') -eq '.gitignore,Main.ps1,Modules/M.psm1,Tools/sub/t.dll' -and $genManifest.FileCount -eq 4) 'Update-Manifest covers package files and skips docs and runtime evidence'
+    Assert-CM ($genManifest.Package -eq 'Fixture' -and $genManifest.Version -eq '9.9.9' -and $genManifest.GitCommit -eq 'abc123') 'Update-Manifest preserves package name, version and Git commit'
+    Assert-CM ((& { try { Assert-CMPackageManifest $genRoot; '' } catch { $_.Exception.Message } }) -eq '') 'Generated manifest passes the installer checksum validation'
+    $genBefore=[IO.File]::ReadAllText($genManifestPath)
+    $genAgain=@(& $updateScript -RootPath $genRoot)
+    Assert-CM ($genAgain[-1] -match 'up to date' -and [IO.File]::ReadAllText($genManifestPath) -eq $genBefore) 'Update-Manifest leaves an up-to-date manifest untouched'
+    [IO.File]::WriteAllText((Join-Path $genRoot 'Modules/M.psm1'),"'changed'`r`n")
+    [IO.File]::WriteAllText((Join-Path $genRoot 'Scripts/New.ps1'),"'new'`r`n")
+    Remove-Item -LiteralPath (Join-Path $genRoot 'Tools/sub/t.dll')
+    $checkOut=@(& $updateScript -RootPath $genRoot -Check); $checkExit=$LASTEXITCODE
+    Assert-CM ($checkExit -eq 1 -and ($checkOut -contains 'CHANGED: Modules/M.psm1') -and ($checkOut -contains 'ADDED: Scripts/New.ps1') -and ($checkOut -contains 'REMOVED: Tools/sub/t.dll') -and [IO.File]::ReadAllText($genManifestPath) -eq $genBefore) 'Update-Manifest -Check reports changes with exit code 1 without writing'
+    & $updateScript -RootPath $genRoot | Out-Null
+    $checkOut=@(& $updateScript -RootPath $genRoot -Check); $checkExit=$LASTEXITCODE
+    Assert-CM ($checkExit -eq 0 -and $checkOut[-1] -match 'up to date') 'Regenerated manifest passes Update-Manifest -Check'
     Write-Output "Self-tests passed: $script:passed"
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }

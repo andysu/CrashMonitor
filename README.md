@@ -61,8 +61,8 @@ CrashMonitor v2 — це автономний комплекс монітори�
 ### 1. Кореневі виконавчі файли
 - [`CrashMonitor.ps1`](CrashMonitor.ps1) — **Головний супервізор**. Перевіряє єдиний екземпляр процесу, реєструє сесію завантаження, запускає фонових воркерів, безперервно пише `heartbeat-v2.csv` та стежить за станом збирачів.
 - [`Worker.ps1`](Worker.ps1) — **Універсальний воркер**. Запускається параметризовано: `-Role telemetry` або `-Role events`. Реалізує цикл збору, контроль вільного місця на диску та оновлення стану прогресу.
-- [`Install.ps1`](Install.ps1) — **Скрипт інсталяції та оновлення**. Створює системну задачу в Планувальнику завдань (`CrashMonitor_AutoStart`), налаштовує параметри аварійних дампів пам'яті (опціонально `-EnableCrashDumps`) і робить резервні копії перед зміною файлів. Логіку перевірки пакета, диференційного бекапу `Tools/` та реєстрації задачі винесено у функції `Assert-CMPackageManifest`, `Test-CMToolsChanged`, `Register-CMAutoStartTask` на початку скрипта. Після зміни будь-якого файлу з `manifest.json` потрібно оновити його `SizeBytes` і `Sha256`, інакше інсталяція зупиниться з `Package checksum mismatch`.
-- [`manifest.json`](manifest.json) — **маніфест цілісності пакета**: розмір і SHA-256 для 57 файлів (скрипти, модулі, тести, конфігурація, `.gitattributes`, `.gitignore`, усі бінарники `Tools/`, включно з драйвером `Tools/LibreHardwareMonitor/LibreHardwareMonitor.sys`). `Install.ps1` перевіряє його до будь-яких змін у системі. `README.md` і `TODO.md` до маніфесту не входять, щоб правки документації не вимагали його перегенерації.
+- [`Install.ps1`](Install.ps1) — **Скрипт інсталяції та оновлення**. Створює системну задачу в Планувальнику завдань (`CrashMonitor_AutoStart`), налаштовує параметри аварійних дампів пам'яті (опціонально `-EnableCrashDumps`) і робить резервні копії перед зміною файлів. Логіку перевірки пакета, диференційного бекапу `Tools/` та реєстрації задачі винесено у функції `Assert-CMPackageManifest`, `Test-CMToolsChanged`, `Register-CMAutoStartTask` на початку скрипта. Після зміни будь-якого файлу з `manifest.json` потрібно перегенерувати маніфест скриптом [`Scripts/Update-Manifest.ps1`](Scripts/Update-Manifest.ps1), інакше інсталяція зупиниться з `Package checksum mismatch`.
+- [`manifest.json`](manifest.json) — **маніфест цілісності пакета**: розмір і SHA-256 файлів пакета: `*.ps1` у корені, `Modules/*.psm1`, `Scripts/*.ps1`, `Tests/*.ps1`, `Config/*.json`, усе в `Tools/` (включно з драйвером `Tools/LibreHardwareMonitor/LibreHardwareMonitor.sys`), `.gitattributes`, `.gitignore`. `Install.ps1` перевіряє його до будь-яких змін у системі. `README.md` і `TODO.md` до маніфесту не входять, щоб правки документації не вимагали його перегенерації. Файл не редагується вручну — лише через `Scripts/Update-Manifest.ps1` (див. «Оновлення маніфесту пакета»).
 - [`NightlyLogCleanup.ps1`](NightlyLogCleanup.ps1) та [`RegisterNightlyTask.ps1`](RegisterNightlyTask.ps1) — сумісні заглушки старого нічного планувальника v1 (деактивовані, оскільки v2 виконує розумне ковзне очищення автоматично щохвилини).
 
 ---
@@ -99,6 +99,7 @@ CrashMonitor v2 — це автономний комплекс монітори�
 - [`Watch-LiveSensors.ps1`](Scripts/Watch-LiveSensors.ps1) — консольний монітор реального часу. В одному рядку виводить навантаження процесора, його температуру на кристалі, енергоспоживання (W), напругу `Vcore`, оберти кулера (RPM), оперативну пам'ять, температури NVMe SSD (NAND і контролер), температуру HDD та статус тестів.
 - [`Get-MonitorStatus.ps1`](Scripts/Get-MonitorStatus.ps1) — швидка перевірка працездатності: показує PID супервізора, стан воркерів (Waiting/Collecting), послідовність heartbeat та повертає `PASS`/`FAIL`.
 - [`Stop-Monitor.ps1`](Scripts/Stop-Monitor.ps1) — безпечна та штатна зупинка монітора через запит `stop.request` без ризику пошкодження відкритих файлів.
+- [`Update-Manifest.ps1`](Scripts/Update-Manifest.ps1) — перегенеровує `manifest.json` (розмір і SHA-256) за фіксованим правилом складу пакета. Корінь проекту визначає сам (батьківська тека `Scripts/`), інший шлях задається `-RootPath`. Якщо змін немає, файл не перезаписується. Режим `-Check` нічого не записує, виводить `ADDED`/`CHANGED`/`REMOVED` і повертає код виходу 1 при розбіжності.
 - [`Export-Diagnostics.ps1`](Scripts/Export-Diagnostics.ps1) — створює діагностичний ZIP-пакет у папці `Exports/` для передачі на аналіз фахівцям.
 - [`Invoke-SystemStressTest.ps1`](Scripts/Invoke-SystemStressTest.ps1) — комплексний сценарій стрес-тестування системи (диски + пам'ять + CPU) для провокації збою під контролем CrashMonitor.
 - [`Watch-DiskStress.ps1`](Scripts/Watch-DiskStress.ps1) — утиліта відстеження дискового навантаження під час стрес-тестів.
@@ -108,8 +109,9 @@ CrashMonitor v2 — це автономний комплекс монітори�
 ---
 
 ### 4. Автоматизоване тестування (`Tests/`)
-- [`Test-Self.ps1`](Tests/Test-Self.ps1) — **81 вбудований самотест** (23 перевірки синтаксису PowerShell-файлів + 58 функціональних тестів; кількість перевірок синтаксису зростає разом із кількістю скриптів у `Scripts/`). Перевіряє синтаксис усіх скриптів у проекті, парсинг XML/WHEA, класифікацію BugCheck, розбір прапорців Event 41 (кнопка живлення, сну), порівняння лічильників SMART, розрахунок метрик збою, механізми ротації, атомарну заміну файлів `[IO.File]::Replace`, блокування файлів, цілісність CSV та логіку ковзного вікна `Limit-CMCsvLog`. Не потребує зовнішніх залежностей.
+- [`Test-Self.ps1`](Tests/Test-Self.ps1) — **88 вбудованих самотестів** (24 перевірки синтаксису PowerShell-файлів + 64 функціональні тести; кількість перевірок синтаксису зростає разом із кількістю скриптів у `Scripts/`). Перевіряє синтаксис усіх скриптів у проекті, парсинг XML/WHEA, класифікацію BugCheck, розбір прапорців Event 41 (кнопка живлення, сну), порівняння лічильників SMART, розрахунок метрик збою, механізми ротації, атомарну заміну файлів `[IO.File]::Replace`, блокування файлів, цілісність CSV та логіку ковзного вікна `Limit-CMCsvLog`. Не потребує зовнішніх залежностей.
   - Тести інсталятора: функції `Assert-CMPackageManifest` (перевірка SHA-256 за `manifest.json`, нормалізація LF/CRLF, відмова при зміненому/відсутньому файлі та path traversal), `Test-CMToolsChanged` (диференційний бекап `Tools/`) і `Register-CMAutoStartTask` (параметри задачі `CrashMonitor_AutoStart`) завантажуються з `Install.ps1` через AST-парсер, без запуску інсталятора. Командлети ScheduledTasks підміняються моками, тому реальна задача не створюється і не змінюється.
+  - Тести `Scripts/Update-Manifest.ps1` на тимчасовому пакеті: склад (без `*.md` та `Evidence/`), збереження `Package`/`Version`/`GitCommit`, сумісність з `Assert-CMPackageManifest`, відсутність перезапису без змін, `-Check` з кодом виходу 1/0.
 - [`Test-Windows.ps1`](Tests/Test-Windows.ps1) — димовий тест сумісності в середовищі Windows: перевіряє права, статус Scheduled Task, доступність каналів журналів подій та WMI.
 
 ---
@@ -270,6 +272,16 @@ Start-ScheduledTask -TaskName "CrashMonitor_AutoStart"
      powershell -ExecutionPolicy Bypass -File .\Tests\Test-Self.ps1
      ```
    - Тест перевіряє сумісність синтаксису, роботу блокувань, парсерів та експорту і захищає від внесення регресійних помилок.
+5. **Оновлення маніфесту пакета** (після зміни коду, конфігурації чи `Tools/`, перед комітом):
+   - Перевірити, чи маніфест актуальний (нічого не записує; код виходу 1, якщо є розбіжності):
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File .\Scripts\Update-Manifest.ps1 -Check
+     ```
+   - Перегенерувати `manifest.json`:
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File .\Scripts\Update-Manifest.ps1
+     ```
+   - Команди виконуються з кореня проекту (наприклад, `C:\Users\andy\CrashMonitor`) і не потребують прав адміністратора. Скрипт можна запускати з будь-якої теки: корінь визначається за його власним розташуванням, або явно через `-RootPath "<шлях до проекту>"`.
 
 ---
 

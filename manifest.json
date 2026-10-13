@@ -1,9 +1,9 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T07:25:36Z",
+    "GeneratedUtc":  "2026-10-13T07:39:53Z",
     "GitCommit":  null,
-    "FileCount":  57,
+    "FileCount":  58,
     "Files":  [
                   {
                       "Path":  ".gitattributes",
@@ -116,6 +116,11 @@
                       "Sha256":  "651ca88c81826efb70982b7ec932561c0aa9b753399ce8f541b188991dc6dec5"
                   },
                   {
+                      "Path":  "Scripts/Update-Manifest.ps1",
+                      "SizeBytes":  4407,
+                      "Sha256":  "53412962f8a890323db909953d8541fca5aef7a92e1b06d1a33742d8a76939e3"
+                  },
+                  {
                       "Path":  "Scripts/Watch-DiskStress.ps1",
                       "SizeBytes":  1617,
                       "Sha256":  "da037c9d3bda35ab7cf990f28444f9ff74fa7766ef572235ff2f5af8b197edf8"
@@ -127,8 +132,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  26097,
-                      "Sha256":  "6aa20e48d40efb929f87e01a61c3d474d5f42615ca475dbc1b90e3bf9c77484d"
+                      "SizeBytes":  29061,
+                      "Sha256":  "ddbb38f68f6aae815721cab5f03e0a72a76d40ff2642a206dbfe492e8f55f043"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
