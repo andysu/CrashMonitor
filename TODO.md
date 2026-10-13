@@ -101,3 +101,8 @@
 - [x] **3. Склад `manifest.json`:**
   - [x] **3.1** Рішення користувача: включити `.gitattributes`, `.gitignore` та всі файли `Tools/LibreHardwareMonitor/` (включно з драйвером `.sys`). `README.md` і `TODO.md` до manifest не входять.
   - [x] **3.2** `manifest.json` розширено з 33 до 57 файлів (`Install.ps1` без змін); усі хеші збігаються, підміна байта в `LibreHardwareMonitor.sys` зупиняє інсталяцію з `Package checksum mismatch`; 81/81 самотестів.
+- [ ] **4. Генератор маніфесту `Scripts/Update-Manifest.ps1`:**
+  - [ ] **4.1** Скрипт перераховує розмір і SHA-256 за фіксованим правилом складу: `*.ps1` у корені, `Modules/*.psm1`, `Scripts/*.ps1`, `Tests/*.ps1`, `Config/*.json`, усе в `Tools/`, `.gitattributes`, `.gitignore`. Корінь за замовчуванням — батьківська тека `Scripts/`; `-RootPath` для іншого розташування.
+  - [ ] **4.2** Формат і порядок записів збігаються з поточним `manifest.json` (перший запуск без змін у файлах не дає diff); `Package`, `Version`, `GitCommit` зберігаються; `GeneratedUtc` змінюється лише при зміні складу чи хешів.
+  - [ ] **4.3** Режим `-Check`: нічого не записує, виводить додані/видалені/змінені файли, код виходу 1 при розбіжності.
+  - [ ] **4.4** Тести в `Tests\Test-Self.ps1` на тимчасовому пакеті: генерація, ідемпотентність, `-Check`, сумісність результату з `Assert-CMPackageManifest`. Оновити `README.md`.
