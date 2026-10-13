@@ -17,8 +17,11 @@ if (-not $boot) { $boot=Get-CMBootInfo }
 $previous=Read-CMJson (Join-Path $RootPath 'Evidence/State/previous-session.json')
 $statusPath=Join-Path $RootPath "Evidence/State/worker-$Role.json"
 function Write-ProgressState {
+    # Never fatal: a progress write that fails (file held by another process) must not stop collection.
+    # If writes keep failing, the supervisor sees no progress and restarts the worker after WorkerStallSeconds.
     param([string]$Phase,[string]$ErrorText='')
-    Write-CMJson $statusPath @{ Pid=$PID; Role=$Role; Phase=$Phase; ProgressUtc=[datetime]::UtcNow.ToString('o'); Error=$ErrorText }
+    try { Write-CMJson $statusPath @{ Pid=$PID; Role=$Role; Phase=$Phase; ProgressUtc=[datetime]::UtcNow.ToString('o'); Error=$ErrorText } }
+    catch { try { Write-CMLog $RootPath $Role "Progress state not written ($Phase): $_" 'WARNING' } catch { } }
 }
 Write-ProgressState 'Starting'
 $clock=[Diagnostics.Stopwatch]::StartNew()

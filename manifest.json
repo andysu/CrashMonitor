@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T10:29:58Z",
+    "GeneratedUtc":  "2026-10-13T10:40:49Z",
     "GitCommit":  null,
     "FileCount":  62,
     "Files":  [
@@ -27,8 +27,8 @@
                   },
                   {
                       "Path":  "CrashMonitor.ps1",
-                      "SizeBytes":  8740,
-                      "Sha256":  "0905c55811f4f140c5c52ffba358493458737f28e0f9724630cd0563d9555952"
+                      "SizeBytes":  9201,
+                      "Sha256":  "4ffdf240a2030fb1d4a0f5266b4a75116162dda5f45b600f5ac08d6456e09bae"
                   },
                   {
                       "Path":  "Install.ps1",
@@ -37,8 +37,8 @@
                   },
                   {
                       "Path":  "Modules/Common.psm1",
-                      "SizeBytes":  28444,
-                      "Sha256":  "ea45e8e50aeaace17e076d6e1d6c8d4d24b9106626baa6df70ab5a58bda4cea1"
+                      "SizeBytes":  30161,
+                      "Sha256":  "2d9214d1b3f00796ac898e6554440549e6d2887a8929e21670afb882a77b08dd"
                   },
                   {
                       "Path":  "Modules/Diagnostics.psm1",
@@ -137,8 +137,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  68851,
-                      "Sha256":  "c3ebc91455d0373ba0add8c0b477afa771c0e19d473484dbaabc57e1490402eb"
+                      "SizeBytes":  71447,
+                      "Sha256":  "7f240aa8e4557dea4b1ae0c4a8989578e11720d0dfc8f63db65556f5b20f4f76"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
@@ -312,8 +312,8 @@
                   },
                   {
                       "Path":  "Worker.ps1",
-                      "SizeBytes":  5159,
-                      "Sha256":  "d4e3a854d2d28cf1b13a789488dc61dd0cab9fee330f3220af53c36b7310b0fe"
+                      "SizeBytes":  5498,
+                      "Sha256":  "73b3d884f4f50f096334f1c406fa0bf468358318d7dbdff5bb701ce4b0454346"
                   }
               ]
 }

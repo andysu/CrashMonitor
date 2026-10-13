@@ -26,16 +26,46 @@ function Write-CMJson {
         $bytes = $script:Utf8.GetBytes(($Value | ConvertTo-Json -Depth 24))
         $stream = [IO.File]::Open($temp, 'CreateNew', 'Write', 'None')
         try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temp, $Path, [NullString]::Value) }
-        else { [IO.File]::Move($temp, $Path) }
+        # File.Replace fails with a sharing violation while another process has the file open without delete
+        # sharing (an antivirus scan, an external tool); such holds are brief, so retry before giving up.
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temp, $Path, [NullString]::Value) }
+                else { [IO.File]::Move($temp, $Path) }
+                break
+            } catch {
+                $ex = $_.Exception
+                if ($ex.InnerException) { $ex = $ex.InnerException }
+                if ($attempt -ge 6 -or -not ($ex -is [IO.IOException] -or $ex -is [UnauthorizedAccessException])) { throw }
+                Start-Sleep -Milliseconds (50 * $attempt)
+            }
+        }
     } finally { if ([IO.File]::Exists($temp)) { [IO.File]::Delete($temp) } }
 }
+
+# Readers allow writers to replace the file underneath them; File.ReadAllText (FileShare.Read) made the
+# supervisor's reads of worker-*.json break the workers' Write-CMJson.
+$script:JsonReadShare = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
 
 function Read-CMJson {
     param([string]$Path, $Default = $null)
     if (-not (Test-Path -LiteralPath $Path)) { return $Default }
+    # During File.Replace the target is briefly delete-pending and cannot be opened; retry for a moment.
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            $stream = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $script:JsonReadShare)
+            break
+        } catch {
+            $ex = $_.Exception
+            if ($ex.InnerException) { $ex = $ex.InnerException }
+            if ($ex -is [IO.FileNotFoundException]) { return $Default }
+            if ($attempt -ge 6 -or -not ($ex -is [IO.IOException] -or $ex -is [UnauthorizedAccessException])) { throw }
+            Start-Sleep -Milliseconds (20 * $attempt)
+        }
+    }
+    try { $reader = New-Object IO.StreamReader($stream, $script:Utf8, $true); $text = $reader.ReadToEnd() } finally { $stream.Dispose() }
     # Corrupt checkpoints must be reported by the caller, never silently advanced.
-    return ([IO.File]::ReadAllText($Path) | ConvertFrom-Json -ErrorAction Stop)
+    return ($text | ConvertFrom-Json -ErrorAction Stop)
 }
 
 function Add-CMText {

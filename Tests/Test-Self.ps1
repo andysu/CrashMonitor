@@ -62,6 +62,29 @@ try {
     Write-CMJson $checkpoint @{RecordId=42; AnchorUtc='2026-10-07T12:00:00Z'}
     Write-CMJson $checkpoint @{RecordId=43; AnchorUtc='2026-10-07T12:00:01Z'}
     Assert-CM ((Read-CMJson $checkpoint).RecordId -eq 43) 'Checkpoint survives serialization and atomic replacement'
+    # JSON state replaced while another process reads it: the supervisor reads worker-*.json every 2-5 s, and a failed
+    # File.Replace outside try stopped the telemetry worker silently (workstation, 2026-10-13 10:26:16 UTC).
+    if (-not ('CrashMonitorTest.DelayedClose' -as [type])) {
+        Add-Type -TypeDefinition 'namespace CrashMonitorTest { public static class DelayedClose { public static void After(System.IDisposable handle, int ms) { var t = new System.Threading.Thread(() => { System.Threading.Thread.Sleep(ms); handle.Dispose(); }); t.IsBackground = true; t.Start(); } } }'
+    }
+    $racePath=Join-Path $temp 'race/worker-telemetry.json'
+    Write-CMJson $racePath @{ Phase='Starting' }
+    $readShare=& (Get-Module Common | Select-Object -First 1) { $script:JsonReadShare }
+    $raceError=''
+    try { $sharedReader=New-Object IO.FileStream($racePath,[IO.FileMode]::Open,[IO.FileAccess]::Read,$readShare); try { Write-CMJson $racePath @{ Phase='Waiting' } } finally { $sharedReader.Dispose() } } catch { $raceError=[string]$_ }
+    $strictReader=[IO.File]::Open($racePath,'Open','Read','Read')
+    [CrashMonitorTest.DelayedClose]::After($strictReader,200)
+    $retryError=''; try { Write-CMJson $racePath @{ Phase='Collecting' } } catch { $retryError=[string]$_ }
+    Assert-CM ($raceError -eq '' -and $retryError -eq '' -and (Read-CMJson $racePath).Phase -eq 'Collecting') 'JSON state is replaced while Read-CMJson reads it and retried while a strict reader briefly holds it'
+    $workerAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Worker.ps1'),[ref]$null,[ref]$null)
+    . ([scriptblock]::Create(($workerAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Write-ProgressState' },$false) | Select-Object -First 1).Extent.Text))
+    $RootPath=Join-Path $temp 'progress'; $Role='telemetry'; $statusPath=Join-Path $RootPath 'Evidence/State/worker-telemetry.json'
+    Write-CMJson $statusPath @{ Phase='Starting' }
+    $lockedStatus=[IO.File]::Open($statusPath,'Open','ReadWrite','None')
+    $progressError=''
+    try { Write-ProgressState 'Waiting' } catch { $progressError=[string]$_ } finally { $lockedStatus.Dispose() }
+    Assert-CM ($progressError -eq '' -and @(Get-Content (Join-Path $RootPath 'Evidence/Logs/telemetry.log') -ErrorAction SilentlyContinue | Where-Object { $_ -match '\[WARNING\] Progress state not written' }).Count -eq 1) 'A worker that cannot write its progress state logs it and keeps collecting'
+    Remove-Variable RootPath,Role,statusPath
     $query=Get-CMEventXPath 43 99 $boot $false 'System'
     $decoded=[Net.WebUtility]::HtmlDecode($query)
     Assert-CM ($decoded -match 'EventRecordID > 43' -and $decoded -match 'EventRecordID <= 99' -and $decoded -match 'WHEA') 'Incremental query is bounded and includes WHEA'

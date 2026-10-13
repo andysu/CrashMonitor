@@ -90,10 +90,14 @@ try {
     while (-not (Test-Path -LiteralPath (Join-Path $state 'stop.request'))) {
         if (($clock.ElapsedMilliseconds-$lastHeartbeat) -ge ([double]$config.HeartbeatIntervalSeconds*1000)) {
             $now=[DateTimeOffset]::Now; $sequence++
-            Write-CMCsv -Path (Join-Path $RootPath 'Evidence/Logs/heartbeat-v2.csv') -Columns $heartbeatColumns -Row @{
-                SchemaVersion=2; Utc=$now.UtcDateTime.ToString('o'); Local=$now.ToString('o'); UtcOffsetMinutes=$now.Offset.TotalMinutes
-                BootKey=$boot.BootKey; MonitorSessionId=$sessionId; Sequence=$sequence; MonotonicMs=$clock.ElapsedMilliseconds
-            }
+            # A heartbeat or health write that fails (file held by another program) is logged and skipped:
+            # an exception here would stop the supervisor and with it the whole monitor.
+            try {
+                Write-CMCsv -Path (Join-Path $RootPath 'Evidence/Logs/heartbeat-v2.csv') -Columns $heartbeatColumns -Row @{
+                    SchemaVersion=2; Utc=$now.UtcDateTime.ToString('o'); Local=$now.ToString('o'); UtcOffsetMinutes=$now.Offset.TotalMinutes
+                    BootKey=$boot.BootKey; MonitorSessionId=$sessionId; Sequence=$sequence; MonotonicMs=$clock.ElapsedMilliseconds
+                }
+            } catch { try { Write-CMLog $RootPath 'supervisor' "Heartbeat  not written: $_" 'WARNING' } catch { } }
             $lastHeartbeat=$clock.ElapsedMilliseconds
             # The remote receiver treats silence of these packets as the moment the machine stopped.
             Send-CMUdpPacket -Config $config -Payload ([ordered]@{ SchemaVersion=3; Type='hb'; Seq=$sequence; Utc=$now.UtcDateTime.ToString('o'); BootKey=$boot.BootKey; MonitorSessionId=$sessionId })
@@ -103,7 +107,7 @@ try {
                 try { $status=Read-CMJson (Join-Path $state "worker-$role.json") } catch { }
                 $health.Workers[$role]=$status
             }
-            Write-CMJson (Join-Path $state 'health.json') $health
+            try { Write-CMJson (Join-Path $state 'health.json') $health } catch { try { Write-CMLog $RootPath 'supervisor' "health.json not written: $_" 'WARNING' } catch { } }
         }
         if (($clock.ElapsedMilliseconds-$lastCheck) -ge 5000) {
             foreach ($role in @('events','telemetry')) {
