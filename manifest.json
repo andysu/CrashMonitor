@@ -22,8 +22,8 @@
                   },
                   {
                       "Path":  "Install.ps1",
-                      "SizeBytes":  8956,
-                      "Sha256":  "a2c98d9a9d5e9c1ecba2ee852021b01a0087c1b8e0e164f78ce925ea4f9cfc59"
+                      "SizeBytes":  9441,
+                      "Sha256":  "6e2221a799ebe1c36adb473d29c19f2fccbe03c178dce3270bb07fe4a1d5c283"
                   },
                   {
                       "Path":  "Modules/Common.psm1",
@@ -117,8 +117,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  19565,
-                      "Sha256":  "cc6d71d749d01584f23feac182d31a4a91cf78038b2c942a6bb2ca9fdd1e79e1"
+                      "SizeBytes":  26097,
+                      "Sha256":  "6aa20e48d40efb929f87e01a61c3d474d5f42615ca475dbc1b90e3bf9c77484d"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",

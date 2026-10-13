@@ -216,5 +216,62 @@ try {
             Remove-Variable SavedInventoryFixture,SavedExportFixture -Scope Script
         }
     }
+    # Install.ps1 helpers: load only the function definitions via the AST; the installer itself never runs.
+    $installAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Install.ps1'),[ref]$null,[ref]$null)
+    $installFunctions=@($installAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] },$false))
+    foreach ($fn in $installFunctions) { . ([scriptblock]::Create($fn.Extent.Text)) }
+    Assert-CM ((@($installFunctions.Name) -join ',') -eq 'Assert-CMPackageManifest,Test-CMToolsChanged,Register-CMAutoStartTask') 'Install.ps1 exposes testable helper functions'
+
+    $pkg=Join-Path $temp 'package';[void][IO.Directory]::CreateDirectory((Join-Path $pkg 'Modules'))
+    $pkgFile=Join-Path $pkg 'Modules/Fixture.psm1'
+    [IO.File]::WriteAllText($pkgFile,"line one`r`nline two`r`n")
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try { $lfFixtureHash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("line one`nline two`n")))).Replace('-','') } finally { $sha.Dispose() }
+    $writeManifest={ param($Path,$Hash) [IO.File]::WriteAllText((Join-Path $pkg 'manifest.json'),(ConvertTo-Json @{Files=@(@{Path=$Path;Sha256=$Hash})} -Depth 4)) }
+    $manifestError={ try { Assert-CMPackageManifest $pkg; return '' } catch { return $_.Exception.Message } }
+    Assert-CM ((& $manifestError) -eq '') 'Manifest check skips a package without manifest.json'
+    & $writeManifest 'Modules/Fixture.psm1' (Get-FileHash -LiteralPath $pkgFile -Algorithm SHA256).Hash.ToLower()
+    Assert-CM ((& $manifestError) -eq '') 'Manifest check accepts a direct SHA-256 match'
+    & $writeManifest 'Modules/Fixture.psm1' $lfFixtureHash
+    Assert-CM ((& $manifestError) -eq '') 'Manifest check accepts a CRLF file whose manifest hash was taken with LF endings'
+    [IO.File]::WriteAllText($pkgFile,"line one`r`nline 2`r`n")
+    Assert-CM ((& $manifestError) -match 'checksum mismatch: Modules/Fixture.psm1') 'Manifest check rejects a modified file'
+    & $writeManifest 'Modules/Missing.psm1' $lfFixtureHash
+    Assert-CM ((& $manifestError) -match 'Package file missing: Modules/Missing.psm1') 'Manifest check rejects a missing file'
+    & $writeManifest '../outside.ps1' $lfFixtureHash
+    Assert-CM ((& $manifestError) -match 'Invalid path') 'Manifest check rejects path traversal'
+
+    $toolsSource=Join-Path $temp 'tools-src';$toolsTarget=Join-Path $temp 'tools-dst'
+    [void][IO.Directory]::CreateDirectory((Join-Path $toolsSource 'sub'))
+    [IO.File]::WriteAllText((Join-Path $toolsSource 'a.dll'),'AAAA')
+    [IO.File]::WriteAllText((Join-Path $toolsSource 'sub/b.dll'),'BBBB')
+    Assert-CM (-not (Test-CMToolsChanged $toolsSource $toolsTarget)) 'Tools backup is skipped when no installed Tools directory exists'
+    [void][IO.Directory]::CreateDirectory((Join-Path $toolsTarget 'sub'))
+    Copy-Item (Join-Path $toolsSource 'a.dll') (Join-Path $toolsTarget 'a.dll')
+    Assert-CM (Test-CMToolsChanged $toolsSource $toolsTarget) 'Tools backup is required when an installed tool file is missing'
+    Copy-Item (Join-Path $toolsSource 'sub/b.dll') (Join-Path $toolsTarget 'sub/b.dll')
+    Assert-CM (-not (Test-CMToolsChanged $toolsSource $toolsTarget)) 'Tools backup is skipped when installed tools are identical'
+    [IO.File]::WriteAllText((Join-Path $toolsTarget 'sub/b.dll'),'BBBX')
+    Assert-CM (Test-CMToolsChanged $toolsSource $toolsTarget) 'Tools backup is required when same-size tool content differs'
+
+    # Mock the ScheduledTasks cmdlets; the real task is never created or changed.
+    $taskMocks='New-ScheduledTaskAction','New-ScheduledTaskTrigger','New-ScheduledTaskPrincipal','New-ScheduledTaskSettingsSet','Register-ScheduledTask'
+    try {
+        function global:New-ScheduledTaskAction { param([string]$Execute,[string]$Argument,[string]$WorkingDirectory) [pscustomobject]@{Execute=$Execute;Argument=$Argument;WorkingDirectory=$WorkingDirectory} }
+        function global:New-ScheduledTaskTrigger { param([switch]$AtStartup) [pscustomobject]@{AtStartup=[bool]$AtStartup} }
+        function global:New-ScheduledTaskPrincipal { param([string]$UserId,[string]$LogonType,[string]$RunLevel) [pscustomobject]@{UserId=$UserId;LogonType=$LogonType;RunLevel=$RunLevel} }
+        function global:New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries,[TimeSpan]$ExecutionTimeLimit,[int]$RestartCount,[TimeSpan]$RestartInterval,[string]$MultipleInstances) [pscustomobject]@{Batteries=($AllowStartIfOnBatteries -and $DontStopIfGoingOnBatteries);ExecutionTimeLimit=$ExecutionTimeLimit;RestartCount=$RestartCount;RestartInterval=$RestartInterval;MultipleInstances=$MultipleInstances} }
+        function global:Register-ScheduledTask { param([string]$TaskName,$Action,$Trigger,$Principal,$Settings,[switch]$Force) $global:CMTestRegisteredTask=[pscustomobject]@{TaskName=$TaskName;Action=$Action;Trigger=$Trigger;Principal=$Principal;Settings=$Settings;Force=[bool]$Force} }
+        $global:CMTestRegisteredTask=$null
+        Register-CMAutoStartTask 'D:\CM Root'
+        $task=$global:CMTestRegisteredTask
+        Assert-CM ($task.TaskName -eq 'CrashMonitor_AutoStart' -and $task.Force -and $task.Trigger.AtStartup) 'AutoStart task is registered at startup under its fixed name'
+        Assert-CM (($task.Action.Execute -replace '/','\') -like '*\System32\WindowsPowerShell\v1.0\powershell.exe' -and $task.Action.Argument -eq '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "D:\CM Root\CrashMonitor.ps1" -RootPath "D:\CM Root" -NonInteractive' -and $task.Action.WorkingDirectory -eq 'D:\CM Root') 'AutoStart task runs the supervisor with quoted RootPath'
+        Assert-CM ($task.Principal.UserId -eq 'SYSTEM' -and $task.Principal.LogonType -eq 'ServiceAccount' -and $task.Principal.RunLevel -eq 'Highest') 'AutoStart task runs as SYSTEM with highest privileges'
+        Assert-CM ($task.Settings.Batteries -and $task.Settings.ExecutionTimeLimit -eq [TimeSpan]::Zero -and $task.Settings.RestartCount -eq 3 -and $task.Settings.RestartInterval -eq [TimeSpan]::FromMinutes(1) -and $task.Settings.MultipleInstances -eq 'IgnoreNew') 'AutoStart task has no time limit, restarts on failure and ignores duplicate starts'
+    } finally {
+        foreach ($name in $taskMocks) { Remove-Item "Function:global:$name" -ErrorAction SilentlyContinue }
+        Remove-Variable CMTestRegisteredTask -Scope Global -ErrorAction SilentlyContinue
+    }
     Write-Output "Self-tests passed: $script:passed"
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }

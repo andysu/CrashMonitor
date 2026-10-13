@@ -2,19 +2,15 @@
 [CmdletBinding()]
 param([string]$RootPath='C:\CrashMonitor', [switch]$EnableCrashDumps, [switch]$DisableAutoReboot, [switch]$NoStart)
 $ErrorActionPreference='Stop'
-if ($env:OS -ne 'Windows_NT') { throw 'Installation requires Windows.' }
-$identity=[Security.Principal.WindowsIdentity]::GetCurrent()
-$principal=New-Object Security.Principal.WindowsPrincipal($identity)
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run Windows PowerShell as Administrator.' }
-if ($DisableAutoReboot -and -not $EnableCrashDumps) { throw '-DisableAutoReboot requires -EnableCrashDumps.' }
-$RootPath=[IO.Path]::GetFullPath($RootPath).TrimEnd('\')
-$source=$PSScriptRoot
-$manifestPath=Join-Path $source 'manifest.json'
-if (Test-Path -LiteralPath $manifestPath) {
+# Install helpers are plain functions so Tests/Test-Self.ps1 can load them via the AST without running the installer.
+function Assert-CMPackageManifest {
+    param([string]$Source)
+    $manifestPath=Join-Path $Source 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) { return }
     $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($entry in $manifest.Files) {
         if ($entry.Path -notmatch '^[A-Za-z0-9_./-]+$' -or $entry.Path -match '(^|/)\.\.(/|$)' -or [IO.Path]::IsPathRooted($entry.Path)) { throw 'Invalid path in package manifest.' }
-        $file=Join-Path $source $entry.Path
+        $file=Join-Path $Source $entry.Path
         if (-not (Test-Path -LiteralPath $file)) { throw "Package file missing: $($entry.Path)" }
         $actualHash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
         if ($actualHash -ne $entry.SHA256) {
@@ -30,6 +26,37 @@ if (Test-Path -LiteralPath $manifestPath) {
         }
     }
 }
+function Test-CMToolsChanged {
+    param([string]$SourceTools,[string]$TargetTools)
+    if (-not (Test-Path -LiteralPath $TargetTools) -or -not (Test-Path -LiteralPath $SourceTools)) { return $false }
+    foreach ($sf in @(Get-ChildItem -Path $SourceTools -Recurse -File)) {
+        $rel = $sf.FullName.Substring($SourceTools.Length)
+        $destFile = Join-Path $TargetTools $rel
+        if (-not (Test-Path -LiteralPath $destFile)) { return $true }
+        $df = Get-Item -LiteralPath $destFile
+        if ($df.Length -ne $sf.Length -or (Get-FileHash -LiteralPath $df.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $sf.FullName -Algorithm SHA256).Hash) { return $true }
+    }
+    return $false
+}
+function Register-CMAutoStartTask {
+    param([string]$RootPath)
+    $exe=Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    $taskArgs='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -RootPath "{1}" -NonInteractive' -f (Join-Path $RootPath 'CrashMonitor.ps1'),$RootPath
+    $action=New-ScheduledTaskAction -Execute $exe -Argument $taskArgs -WorkingDirectory $RootPath
+    $trigger=New-ScheduledTaskTrigger -AtStartup
+    $taskPrincipal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName 'CrashMonitor_AutoStart' -Action $action -Trigger $trigger -Principal $taskPrincipal -Settings $settings -Force | Out-Null
+}
+if ($env:OS -ne 'Windows_NT') { throw 'Installation requires Windows.' }
+$identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+$principal=New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run Windows PowerShell as Administrator.' }
+if ($DisableAutoReboot -and -not $EnableCrashDumps) { throw '-DisableAutoReboot requires -EnableCrashDumps.' }
+$RootPath=[IO.Path]::GetFullPath($RootPath).TrimEnd('\')
+$source=$PSScriptRoot
+$manifestPath=Join-Path $source 'manifest.json'
+Assert-CMPackageManifest $source
 # Validate pure logic before touching the installed monitor or OS settings.
 & (Join-Path $source 'Tests/Test-Self.ps1')
 Import-Module (Join-Path $source 'Modules/Common.psm1')
@@ -61,20 +88,7 @@ foreach ($relative in $files + @('Config/config.json')) {
 }
 $toolsDir=Join-Path $RootPath 'Tools'
 $toolsSrc=Join-Path $source 'Tools'
-$toolsNeedBackup = $false
-if ((Test-Path -LiteralPath $toolsDir) -and ($source.TrimEnd('\') -ne $RootPath) -and (Test-Path -LiteralPath $toolsSrc)) {
-    $srcFiles = @(Get-ChildItem -Path $toolsSrc -Recurse -File)
-    foreach ($sf in $srcFiles) {
-        $rel = $sf.FullName.Substring($toolsSrc.Length)
-        $destFile = Join-Path $toolsDir $rel
-        if (-not (Test-Path -LiteralPath $destFile)) { $toolsNeedBackup = $true; break }
-        $df = Get-Item -LiteralPath $destFile
-        if ($df.Length -ne $sf.Length -or (Get-FileHash -LiteralPath $df.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $sf.FullName -Algorithm SHA256).Hash) {
-            $toolsNeedBackup = $true; break
-        }
-    }
-}
-if ($toolsNeedBackup) {
+if (($source.TrimEnd('\') -ne $RootPath) -and (Test-CMToolsChanged $toolsSrc $toolsDir)) {
     $toolsBackup=Join-Path $backup 'Tools'
     [void][IO.Directory]::CreateDirectory($toolsBackup)
     Copy-Item -Path "$toolsDir\*" -Destination $toolsBackup -Recurse -Force
@@ -117,13 +131,7 @@ try {
         & $wevtutil sl 'Microsoft-Windows-Storage-Storport/Operational' /e:true 2>$null
     }
 } catch { }
-$exe=Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-$taskArgs='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -RootPath "{1}" -NonInteractive' -f (Join-Path $RootPath 'CrashMonitor.ps1'),$RootPath
-$action=New-ScheduledTaskAction -Execute $exe -Argument $taskArgs -WorkingDirectory $RootPath
-$trigger=New-ScheduledTaskTrigger -AtStartup
-$taskPrincipal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-$settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName 'CrashMonitor_AutoStart' -Action $action -Trigger $trigger -Principal $taskPrincipal -Settings $settings -Force | Out-Null
+Register-CMAutoStartTask $RootPath
 if (-not $NoStart) { Start-ScheduledTask -TaskName 'CrashMonitor_AutoStart' }
 Write-Output "Installed CrashMonitor v2 in $RootPath. Previous code/task configuration: $backup"
 Write-Output "After 1-2 minutes run: powershell -NoProfile -File `"$RootPath\Tests\Test-Windows.ps1`" -RootPath `"$RootPath`""
