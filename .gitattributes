@@ -7,6 +7,8 @@
 *.json text eol=crlf
 *.xml text eol=crlf
 *.md text eol=lf
+# Git hooks run under sh; CRLF would break them
+.githooks/* text eol=lf
 
 # Binaries
 *.dll binary

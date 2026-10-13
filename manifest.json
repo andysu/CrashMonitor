@@ -1,14 +1,14 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T07:39:53Z",
+    "GeneratedUtc":  "2026-10-13T07:45:19Z",
     "GitCommit":  null,
     "FileCount":  58,
     "Files":  [
                   {
                       "Path":  ".gitattributes",
-                      "SizeBytes":  287,
-                      "Sha256":  "8b84162ea44d9a3a8c19d70684b29e2e1a9b775bc0a80374539b779a1c421126"
+                      "SizeBytes":  361,
+                      "Sha256":  "a0e39c6450f4557b4fc6d65c28983dc49d8688c78f45e102df74756b6d5ef43b"
                   },
                   {
                       "Path":  ".gitignore",

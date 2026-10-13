@@ -1,0 +1,25 @@
+#!/bin/sh
+# Blocks a commit when manifest.json no longer matches the package files (see Scripts/Update-Manifest.ps1).
+# Commits that touch only *.md skip the check: documentation is not part of the manifest.
+staged=$(git diff --cached --name-only --diff-filter=ACMRD)
+[ -z "$staged" ] && exit 0
+if ! printf '%s\n' "$staged" | grep -qv '\.md$'; then
+    exit 0
+fi
+root=$(git rev-parse --show-toplevel)
+if command -v powershell.exe >/dev/null 2>&1; then
+    ps=powershell.exe
+elif command -v pwsh >/dev/null 2>&1; then
+    ps=pwsh
+else
+    echo "pre-commit: PowerShell not found, manifest check skipped." >&2
+    exit 0
+fi
+# The check reads the working tree, so unstaged edits to package files also count.
+if ! "$ps" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$root/Scripts/Update-Manifest.ps1" -RootPath "$root" -Check; then
+    echo "" >&2
+    echo "pre-commit: manifest.json is out of date. Run:" >&2
+    echo "  powershell -ExecutionPolicy Bypass -File .\\Scripts\\Update-Manifest.ps1" >&2
+    echo "then 'git add manifest.json' and commit again." >&2
+    exit 1
+fi

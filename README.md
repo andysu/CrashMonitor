@@ -282,6 +282,7 @@ Start-ScheduledTask -TaskName "CrashMonitor_AutoStart"
      powershell -ExecutionPolicy Bypass -File .\Scripts\Update-Manifest.ps1
      ```
    - Команди виконуються з кореня проекту (наприклад, `C:\Users\andy\CrashMonitor`) і не потребують прав адміністратора. Скрипт можна запускати з будь-якої теки: корінь визначається за його власним розташуванням, або явно через `-RootPath "<шлях до проекту>"`.
+   - Pre-commit hook [`.githooks/pre-commit`](.githooks/pre-commit) виконує `Update-Manifest.ps1 -Check` автоматично і блокує коміт, якщо маніфест застарів. Коміти, що змінюють лише `*.md`, перевірку пропускають. Хук перевіряє робочу теку, тому незакомічені зміни в файлах пакета теж враховуються. Обійти перевірку можна через `git commit --no-verify`, але лише свідомо: інакше `Install.ps1` відмовить у встановленні.
 
 ---
 
@@ -303,3 +304,10 @@ Start-ScheduledTask -TaskName "CrashMonitor_AutoStart"
 
 2. **Захист від блокувань та сміття:**
    Файли результатів роботи, дампів та логів (`Evidence/`, `Backups/`, `Exports/`, `*.zip`) вже додані до `.gitignore` і не потраплятимуть у коміти.
+
+3. **Увімкнення pre-commit hook у кожному новому клоні:**
+   Git не активує хуки з репозиторію автоматично. Один раз після клонування виконайте в корені проекту:
+   ```bash
+   git config core.hooksPath .githooks
+   ```
+   Хук потребує Git for Windows (вбудований `sh`) і `powershell.exe` або `pwsh`. Якщо PowerShell не знайдено, хук виводить попередження і пропускає перевірку.
