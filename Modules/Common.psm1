@@ -81,6 +81,13 @@ function Write-CMLog {
     Add-CMText -Path (Join-Path $Root "Evidence/Logs/$Role.log") -Text "[$([datetime]::UtcNow.ToString('o'))] [$Level] $Message"
 }
 
+function Set-CMProcessPriority {
+    # Scheduled tasks start at BelowNormal (base priority 6) and children inherit it, so under full CPU load the
+    # heartbeat slipped from 2 s to 4.2 s. Returns $true when the priority class was applied.
+    param([Diagnostics.Process]$Process, [Diagnostics.ProcessPriorityClass]$Priority)
+    try { $Process.PriorityClass = $Priority; return $true } catch { return $false }
+}
+
 function Send-CMUdpPacket {
     # Remote evidence survives a power loss that local disks may not. RFC 5424 syslog framing lets any syslog
     # collector (router, NAS) store the packet; Scripts/Receive-Heartbeat.ps1 reads the JSON body.

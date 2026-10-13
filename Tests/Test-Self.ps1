@@ -291,7 +291,7 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         # Background sensor initialisation: the first samples must not wait ~13 s for Add-Type and the driver.
         # The fake reader is a compiled type because script methods must not cross runspaces.
         if (-not ('CrashMonitorTest.FakeVoltageReader' -as [type])) {
-            Add-Type -TypeDefinition 'namespace CrashMonitorTest { public class FakeVoltageReader { public System.Collections.Generic.Dictionary<string,double> ReadAllSensors() { var d = new System.Collections.Generic.Dictionary<string,double>(); d["Nuvoton_NCT6796D_Voltage_Vcore"] = 0.9; d["Intel_Core_i5-9400_Temperature_CPU_Package"] = 42; return d; } public void Close() { } } }'
+            Add-Type -TypeDefinition 'namespace CrashMonitorTest { public class FakeVoltageReader { private int reads; public System.Collections.Generic.Dictionary<string,double> ReadAllSensors() { if (reads++ == 0) { System.Threading.Thread.Sleep(1500); } var d = new System.Collections.Generic.Dictionary<string,double>(); d["Nuvoton_NCT6796D_Voltage_Vcore"] = 0.9; d["Intel_Core_i5-9400_Temperature_CPU_Package"] = 42; return d; } public void Close() { } } }'
         }
         Import-Module (Join-Path $root 'Modules/VoltageMonitor.psm1') -Force
         $voltage=Get-Module VoltageMonitor
@@ -305,8 +305,11 @@ ST1000DM010-2EP102_Temperature_Temperature:32
             $initRow=Get-CMTelemetry $initRoot $root $initCfg ([pscustomobject]@{BootKey='fixture'})
             Assert-CM ($pending.Status -eq 'INITIALIZING' -and $pendingMs -lt 1000 -and $initRow.TemperatureStatus -in @('SENSORS_INITIALIZING','ACPI_WMI') -and $initRow.ErrorsJson -eq '[]' -and @(Import-Csv (Join-Path $initRoot 'Evidence/Logs/temperatures.csv') -Delimiter ';' -ErrorAction SilentlyContinue | Where-Object Status -ne 'ACPI_WMI').Count -eq 0) 'Samples taken while sensors initialise in the background are not delayed and report SENSORS_INITIALIZING without errors'
             $ready=$null
-            for ($i=0; $i -lt 50 -and (-not $ready -or $ready.Status -eq 'INITIALIZING'); $i++) { Start-Sleep -Milliseconds 200; $ready=Get-CrashMonitorVoltageSnapshot -ToolsDir $temp -Background }
+            $readyCallMs=0
+            for ($i=0; $i -lt 50 -and (-not $ready -or $ready.Status -eq 'INITIALIZING'); $i++) { Start-Sleep -Milliseconds 200; $callTimer=[Diagnostics.Stopwatch]::StartNew(); $ready=Get-CrashMonitorVoltageSnapshot -ToolsDir $temp -Background; $readyCallMs=$callTimer.ElapsedMilliseconds }
             Assert-CM ($ready.Status -eq 'OK' -and $ready.Vcore -eq 0.9 -and $ready.CpuTemp -eq 42) 'Sensors appear in the next sample once background initialisation finishes'
+            # The fake reader's first ReadAllSensors takes 1.5 s, like the real first full read: it must happen in the background.
+            Assert-CM ($ready.Status -eq 'OK' -and $readyCallMs -lt 1000) 'The slow first full sensor read is done before the reader reaches the sample loop'
             Close-CrashMonitorVoltageSensor
             & $voltage { $script:BackgroundInitScript={ param($ModulePath,$ToolsDir) $null } }
             $failed=Get-CrashMonitorVoltageSnapshot -ToolsDir $temp -Background
@@ -551,6 +554,13 @@ ST1000DM010-2EP102_Temperature_Temperature:32
     $rxRows=@(Import-Csv (Join-Path $rxDir "heartbeat-$rxHost.csv") -Delimiter ';' -ErrorAction SilentlyContinue)
     $rxEvents=@(Import-Csv (Join-Path $rxDir 'heartbeat-events.csv') -Delimiter ';' -ErrorAction SilentlyContinue)
     Assert-CM ($rxRows.Count -eq 2 -and $rxRows[0].Type -eq 'hb' -and $rxRows[1].Type -eq 'telemetry' -and $rxRows[1].BootKey -eq 'LOOP' -and @($rxEvents | Where-Object Event -eq 'SILENCE').Count -eq 1) 'Monitor packets reach Receive-Heartbeat.ps1 over UDP loopback and silence is recorded'
+
+    # Process priority: scheduled tasks start at BelowNormal; the supervisor and telemetry worker raise themselves.
+    $prioProbe=Start-Process -FilePath (Join-Path $env:SystemRoot 'System32/ping.exe') -ArgumentList @('-n','30','127.0.0.1') -WindowStyle Hidden -PassThru
+    try {
+        $prioSet=Set-CMProcessPriority $prioProbe 'AboveNormal'; $prioProbe.Refresh()
+        Assert-CM ($prioSet -and $prioProbe.PriorityClass -eq 'AboveNormal' -and -not (Set-CMProcessPriority ([Diagnostics.Process]::new()) 'AboveNormal')) 'Set-CMProcessPriority raises a process to AboveNormal and reports failure instead of throwing'
+    } finally { try { $prioProbe.Kill() } catch { } }
 
     # Install.ps1 helpers: load only the function definitions via the AST; the installer itself never runs.
     $installAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Install.ps1'),[ref]$null,[ref]$null)

@@ -13,6 +13,8 @@ $mutex=New-Object Threading.Mutex($false,"Global\CrashMonitorV2_$suffix")
 $locked=$false
 try { $locked=$mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked=$true }
 if (-not $locked) { $mutex.Dispose(); throw 'CrashMonitor is already running for this root.' }
+# The heartbeat must keep its 2 s cadence when a stress test or a hang saturates the CPU.
+$supervisorPriority=Set-CMProcessPriority ([Diagnostics.Process]::GetCurrentProcess()) 'AboveNormal'
 $workers=@{}
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $heartbeatColumns=@('SchemaVersion','Utc','Local','UtcOffsetMinutes','BootKey','MonitorSessionId','Sequence','MonotonicMs')
@@ -25,6 +27,10 @@ function Start-Collector {
     $exe=Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
     $workerArgs=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $PSScriptRoot 'Worker.ps1')),'-Role',$Role,'-RootPath',('"{0}"' -f $RootPath))
     $proc=Start-Process -FilePath $exe -ArgumentList $workerArgs -WindowStyle Hidden -PassThru
+    # Telemetry is light (~150 ms per sample) and must keep sampling under load; the events worker does the
+    # heavier work (event reading, storage snapshots, incident packages) at normal priority.
+    $priority=if ($Role -eq 'telemetry') { 'AboveNormal' } else { 'Normal' }
+    if (-not (Set-CMProcessPriority $proc $priority)) { try { Write-CMLog $RootPath 'supervisor' "Could not set $priority priority for collector $Role." 'WARNING' } catch { } }
     return @{ Process=$proc; StartedMs=$clock.ElapsedMilliseconds; LastProgressMs=$clock.ElapsedMilliseconds; LastProgressUtc=''; Restarts=0 }
 }
 function Stop-Collector {
@@ -84,7 +90,7 @@ try {
 
     Write-CMJson (Join-Path $state 'boot.json') $boot
     Write-CMJson (Join-Path $state 'session.json') @{ Boot=$boot; MonitorSessionId=$sessionId; StartedUtc=[datetime]::UtcNow.ToString('o'); Pid=$PID; ProcessStartUtc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o') }
-    Write-CMLog $RootPath 'supervisor' "CrashMonitor v2 started. Boot=$($boot.BootKey); monitor=$sessionId; pid=$PID."
+    Write-CMLog $RootPath 'supervisor' "CrashMonitor v2 started. Boot=$($boot.BootKey); monitor=$sessionId; pid=$PID; priority=$(if ($supervisorPriority) { 'AboveNormal' } else { 'unchanged' })."
     foreach ($role in @('events','telemetry')) { $workers[$role]=Start-Collector $role }
     $lastHeartbeat=-100000L; $lastCheck=-100000L; $sequence=0L
     while (-not (Test-Path -LiteralPath (Join-Path $state 'stop.request'))) {

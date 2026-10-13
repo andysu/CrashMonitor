@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T10:40:49Z",
+    "GeneratedUtc":  "2026-10-13T11:08:25Z",
     "GitCommit":  null,
     "FileCount":  62,
     "Files":  [
@@ -27,8 +27,8 @@
                   },
                   {
                       "Path":  "CrashMonitor.ps1",
-                      "SizeBytes":  9201,
-                      "Sha256":  "4ffdf240a2030fb1d4a0f5266b4a75116162dda5f45b600f5ac08d6456e09bae"
+                      "SizeBytes":  9930,
+                      "Sha256":  "88127f21d2f9c8232b24aa5bab8a3d342036004efa7da84e79c4de6e88037d4e"
                   },
                   {
                       "Path":  "Install.ps1",
@@ -37,8 +37,8 @@
                   },
                   {
                       "Path":  "Modules/Common.psm1",
-                      "SizeBytes":  30161,
-                      "Sha256":  "2d9214d1b3f00796ac898e6554440549e6d2887a8929e21670afb882a77b08dd"
+                      "SizeBytes":  30582,
+                      "Sha256":  "b1ea85c4cd6e35c5fc0576306f3585e2ebc497e77007e43fb7490602f790f2c8"
                   },
                   {
                       "Path":  "Modules/Diagnostics.psm1",
@@ -57,8 +57,8 @@
                   },
                   {
                       "Path":  "Modules/VoltageMonitor.psm1",
-                      "SizeBytes":  12219,
-                      "Sha256":  "faf88a92a0b94b65c5daaf612d0ac2558ebfbf71d9f0da57ba9788f458af624c"
+                      "SizeBytes":  12737,
+                      "Sha256":  "3693375a1ea3ba83a09573684aef7bd869a6b0b6b807df2b5522770e2144ce23"
                   },
                   {
                       "Path":  "NightlyLogCleanup.ps1",
@@ -137,8 +137,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  71447,
-                      "Sha256":  "7f240aa8e4557dea4b1ae0c4a8989578e11720d0dfc8f63db65556f5b20f4f76"
+                      "SizeBytes":  72619,
+                      "Sha256":  "f05e34779b4a11ee354e8e115a0311751a61221296ba90633dae6770f0eb7f44"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",

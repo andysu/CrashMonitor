@@ -143,7 +143,14 @@ function Receive-CrashMonitorVoltageSensorInit {
     if ($script:InitFailed) { return 'Failed' }
     if (-not $script:InitPipeline) {
         $script:InitPipeline = [PowerShell]::Create()
-        [void]$script:InitPipeline.AddScript($script:BackgroundInitScript.ToString()).AddArgument($script:ModulePath).AddArgument($ToolsDir)
+        # The first full read after initialisation took 6.35 s on the workstation; doing it here keeps it out of the sample loop.
+        $wrapper = {
+            param([string]$InitScript, [string]$ModulePath, [string]$ToolsDir)
+            $reader = & ([scriptblock]::Create($InitScript)) $ModulePath $ToolsDir | Where-Object { $null -ne $_ } | Select-Object -First 1
+            if ($reader) { try { [void]$reader.ReadAllSensors() } catch { } }
+            $reader
+        }
+        [void]$script:InitPipeline.AddScript($wrapper.ToString()).AddArgument($script:BackgroundInitScript.ToString()).AddArgument($script:ModulePath).AddArgument($ToolsDir)
         $script:InitHandle = $script:InitPipeline.BeginInvoke()
         return 'Pending'
     }
