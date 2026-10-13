@@ -79,6 +79,7 @@ try {
     Assert-CM ($cols.Count -eq 23 -and @($cols | Select-Object -Unique).Count -eq $cols.Count) 'Telemetry schema has fixed unique columns'
     $cfg=Get-CMConfig $temp $root
     Assert-CM (-not $cfg.EnableHardwareSensors -and $cfg.SchemaVersion -eq 2) 'Hardware driver probing is opt-in'
+    Assert-CM ($cfg.SampleIntervalSeconds -eq 3 -and $cfg.EventPollSeconds -eq 3 -and $cfg.HeartbeatIntervalSeconds -eq 2) 'Fresh install samples telemetry and events every 3 s with a 2 s heartbeat'
     # Mock only the OS data source; run the actual collector and CSV serializer.
     $script:mockAcpiResult = $null
     $oldCimFunction=Get-Item Function:global:Get-CimInstance -ErrorAction SilentlyContinue

@@ -1,8 +1,8 @@
 {
   "SchemaVersion": 2,
-  "SampleIntervalSeconds": 5,
+  "SampleIntervalSeconds": 3,
   "HeartbeatIntervalSeconds": 2,
-  "EventPollSeconds": 5,
+  "EventPollSeconds": 3,
   "EventBackfillHours": 48,
   "EventBatchSize": 500,
   "WorkerStallSeconds": 300,
