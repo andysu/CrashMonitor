@@ -1,9 +1,9 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T11:53:47Z",
+    "GeneratedUtc":  "2026-10-13T12:25:23Z",
     "GitCommit":  null,
-    "FileCount":  62,
+    "FileCount":  56,
     "Files":  [
                   {
                       "Path":  ".gitattributes",
@@ -12,8 +12,8 @@
                   },
                   {
                       "Path":  ".gitignore",
-                      "SizeBytes":  317,
-                      "Sha256":  "fb3b319cd142f25a5bf778d9e631501ed8ac0af9d971f03c509ebfacb282a1d6"
+                      "SizeBytes":  424,
+                      "Sha256":  "c4227edccea5b613c3ccea6376042c153db1feac53ea7cf32fa7feb36373ed62"
                   },
                   {
                       "Path":  "Config/config.json",
@@ -254,36 +254,6 @@
                       "Path":  "Tools/LibreHardwareMonitor/zh-Hant/Microsoft.Win32.TaskScheduler.resources.dll",
                       "SizeBytes":  9728,
                       "Sha256":  "f8c769a357e6cd27452835e5288fe515fb50bfeec83ef3969975171174b467e5"
-                  },
-                  {
-                      "Path":  "Tools/OpenHardwareMonitor/Aga.Controls.dll",
-                      "SizeBytes":  145920,
-                      "Sha256":  "830e520caf3e89dccaa3c12e3bfc992221c164f2319a2ba57e402499c24290e3"
-                  },
-                  {
-                      "Path":  "Tools/OpenHardwareMonitor/License.html",
-                      "SizeBytes":  28155,
-                      "Sha256":  "b14e66270c828c445662328127f68042a1d6b17e7382e150e542a2045b1a9075"
-                  },
-                  {
-                      "Path":  "Tools/OpenHardwareMonitor/OpenHardwareMonitor.exe",
-                      "SizeBytes":  493568,
-                      "Sha256":  "ec767a74c5659a05bdb7ac10bd42c2ea6d44fa946286029b2866aed476ad83bc"
-                  },
-                  {
-                      "Path":  "Tools/OpenHardwareMonitor/OpenHardwareMonitorLib.dll",
-                      "SizeBytes":  311808,
-                      "Sha256":  "ef02b0991aac678052bb79dfdfd5bfa0b42b1f34b209e35819ba606909655f58"
-                  },
-                  {
-                      "Path":  "Tools/OpenHardwareMonitor/OxyPlot.dll",
-                      "SizeBytes":  305152,
-                      "Sha256":  "d3a00f3b9fbf82c4ee9fcf495a0fcc80f9f26711b4bb4fe15e0b769d47488b50"
-                  },
-                  {
-                      "Path":  "Tools/OpenHardwareMonitor/OxyPlot.WindowsForms.dll",
-                      "SizeBytes":  21504,
-                      "Sha256":  "c92cfe4026ef2319c84aab392f274ebdeb135db85123ff0e44edf4a99b05c7d0"
                   },
                   {
                       "Path":  "Tools/RAMMap.exe",

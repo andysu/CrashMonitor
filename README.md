@@ -125,7 +125,7 @@ CrashMonitor v2 — це автономний комплекс монітори�
 
 ### Сторонні утиліти (`Tools/`)
 - `Tools/LibreHardwareMonitor/` — бібліотека апаратних датчиків (Ring-0, див. розділ безпеки).
-- `Tools/OpenHardwareMonitor/`, `Tools/RAMMap*.exe` — допоміжні утиліти для ручної діагностики.
+- `Tools/RAMMap*.exe` — Sysinternals RAMMap для `Scripts/Clear-MemoryStandby.ps1` (очищення standby-пам'яті).
 - `Tools/smartmontools/` — `smartctl.exe` 7.5 (2025-04-30, x64), `drivedb.h`, ліцензія GPL `COPYING.txt`. Взято з офіційного релізу `smartmontools-7.5.win32-setup.exe` (GitHub `smartmontools/smartmontools`, `RELEASE_7_5`) без запуску інсталятора: підпис `.asc` перевірено ключем `0C95 77FD 2C4C FCB4 B9A5 9964 0A30 812E FF3A EFF5`, опублікованим на smartmontools.org/wiki/Download; SHA-256 `smartctl.exe` (`b5db94e5...7995ea27d`) збігається з `checksums64.txt` пакета. Authenticode-підпису exe не має — проект підписує пакети GPG. Використовується знімком здоров'я накопичувачів і SMART-порівнянням до/після перезавантаження; потребує прав адміністратора (воркер працює від SYSTEM). Диски між знімками зіставляються за серійним номером, бо імена `/dev/sdX` можуть змінюватися між завантаженнями.
 
 ---
