@@ -25,7 +25,13 @@ $clock=[Diagnostics.Stopwatch]::StartNew()
 $lastCleanup=-60000L
 $incidentPending=$true
 if ($Role -eq 'events') { Import-Module (Join-Path $codeRoot 'Modules/EventCapture.psm1') -Force; Import-Module (Join-Path $codeRoot 'Modules/Diagnostics.psm1') -Force }
-else { Import-Module (Join-Path $codeRoot 'Modules/TelemetryV2.psm1') -Force }
+else {
+    Import-Module (Join-Path $codeRoot 'Modules/TelemetryV2.psm1') -Force
+    Write-ProgressState 'WarmingUp'
+    $warmUp=Initialize-CMTelemetry
+    if ($warmUp.Success) { Write-CMLog $RootPath $Role "Performance counter warm-up took $($warmUp.DurationMs) ms." }
+    else { Write-CMLog $RootPath $Role "Performance counter warm-up failed after $($warmUp.DurationMs) ms: $($warmUp.Error)" 'WARN' }
+}
 try {
     while (-not (Test-Path -LiteralPath (Join-Path $RootPath 'Evidence/State/stop.request'))) {
         $next=$clock.ElapsedMilliseconds

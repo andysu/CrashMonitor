@@ -86,7 +86,7 @@ try {
         function global:Get-CimInstance {
             param([string]$ClassName,[string]$Filter,[int]$OperationTimeoutSec,[string]$Namespace)
             switch ($ClassName) {
-                'Win32_PerfFormattedData_PerfOS_Processor' { return [pscustomobject]@{PercentProcessorTime=37} }
+                'Win32_PerfFormattedData_PerfOS_Processor' { $script:mockCpuTimeout=$OperationTimeoutSec; if ($script:mockCpuFail) { throw 'Timed out' }; return [pscustomobject]@{PercentProcessorTime=37} }
                 'Win32_OperatingSystem' { return [pscustomobject]@{FreePhysicalMemory=8388608;TotalVisibleMemorySize=33554432} }
                 'Win32_PerfFormattedData_PerfOS_Memory' { return [pscustomobject]@{CommittedBytes=4294967296;CommitLimit=34359738368;PoolNonpagedBytes=134217728;PoolPagedBytes=268435456;PagesPersec=4} }
                 'Win32_PerfFormattedData_PerfDisk_PhysicalDisk' { return [pscustomobject]@{Name='_Total';CurrentDiskQueueLength=2;DiskReadBytesPersec=1024;DiskWriteBytesPersec=2048;PercentDiskTime=3} }
@@ -108,6 +108,13 @@ try {
         Assert-CM ($acpiMetrics.TemperatureStatus -eq 'ACPI_WMI') 'Collector sets ACPI_WMI status when ACPI thermal zone is active'
         $acpiJson = $acpiMetrics.HardwareSensorsJson | ConvertFrom-Json
         Assert-CM ($acpiJson.ThermalZoneTemp -eq 32.0 -and $acpiJson.CriticalTripPoint -eq 119.0 -and $acpiJson.Source -eq 'MSAcpi_ThermalZoneTemperature') 'Collector converts ACPI tenths-of-kelvin to Celsius correctly'
+
+        $script:mockCpuFail=$false; $script:mockCpuTimeout=$null
+        $warmUp=Initialize-CMTelemetry
+        Assert-CM ($warmUp.Success -and $warmUp.Error -eq '' -and $script:mockCpuTimeout -eq 30) 'Telemetry warm-up queries the CPU counter with a 30 s timeout'
+        $script:mockCpuFail=$true
+        try { $warmUp=Initialize-CMTelemetry } finally { $script:mockCpuFail=$false }
+        Assert-CM (-not $warmUp.Success -and $warmUp.Error -match 'Timed out') 'Failed telemetry warm-up is reported, not thrown'
     } finally {
         Remove-Item Function:global:Get-CimInstance -ErrorAction SilentlyContinue
         if ($oldCimFunction) { Set-Item Function:global:Get-CimInstance $oldCimFunction.ScriptBlock }

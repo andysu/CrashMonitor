@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T07:45:19Z",
+    "GeneratedUtc":  "2026-10-13T07:58:58Z",
     "GitCommit":  null,
     "FileCount":  58,
     "Files":  [
@@ -52,8 +52,8 @@
                   },
                   {
                       "Path":  "Modules/TelemetryV2.psm1",
-                      "SizeBytes":  14587,
-                      "Sha256":  "989fef1e0492bf7b356c6f40e0da283d9f6d704e600a995e1eb51d87d20a23c1"
+                      "SizeBytes":  15355,
+                      "Sha256":  "eedc98894c2da5bc6fe5335ed33d0f7cfeae74b0e130b498a910e07a9598cf92"
                   },
                   {
                       "Path":  "Modules/VoltageMonitor.psm1",
@@ -132,8 +132,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  29061,
-                      "Sha256":  "ddbb38f68f6aae815721cab5f03e0a72a76d40ff2642a206dbfe492e8f55f043"
+                      "SizeBytes":  29677,
+                      "Sha256":  "004af804abfcd5fe1006003f8f4e2abb8a18f70ecaa1e614dc973cf2b37b7947"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
@@ -292,8 +292,8 @@
                   },
                   {
                       "Path":  "Worker.ps1",
-                      "SizeBytes":  3641,
-                      "Sha256":  "ac20cfbab6817ceec007ce431711f8221e6862f4bf2d15f738f9a118168f3dd8"
+                      "SizeBytes":  3974,
+                      "Sha256":  "f4c03ee0b189e610ec99b95de71abcdb6c6ed7bd07243883f3ca3f8a8134818e"
                   }
               ]
 }

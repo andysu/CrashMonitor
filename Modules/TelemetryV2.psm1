@@ -4,6 +4,19 @@ $script:Columns = @('SchemaVersion','Utc','Local','UtcOffsetMinutes','BootKey','
 
 function Get-CMTelemetryColumns { return $script:Columns }
 
+function Initialize-CMTelemetry {
+    # The first performance-counter query in a process is the slowest (CIM session setup; on a cold boot also the
+    # WMI performance provider load) and can exceed the 4 s per-sample timeout. One discarded query warms it up.
+    param([int]$TimeoutSec = 30)
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $null = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -OperationTimeoutSec $TimeoutSec -ErrorAction Stop
+        return [pscustomobject]@{ Success=$true; DurationMs=$timer.ElapsedMilliseconds; Error='' }
+    } catch {
+        return [pscustomobject]@{ Success=$false; DurationMs=$timer.ElapsedMilliseconds; Error=[string]$_ }
+    }
+}
+
 function Get-CMTelemetry {
     param([string]$Root, [string]$CodeRoot, [hashtable]$Config, $Boot)
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -270,4 +283,4 @@ function Close-CMTelemetrySensor {
     } catch { }
 }
 
-Export-ModuleMember -Function Get-CMTelemetryColumns, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor
+Export-ModuleMember -Function Get-CMTelemetryColumns, Initialize-CMTelemetry, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor
