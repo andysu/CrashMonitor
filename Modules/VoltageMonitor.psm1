@@ -177,6 +177,21 @@ function Get-CrashMonitorVoltageSnapshot {
                 if ($snapshot.CpuTemp -eq "N/A" -and ($k -like "*Temperature*CPU_Package*" -or $k -like "*Temperature*Core_Max*" -or $k -like "*Temperature*CPU_Core*")) { $snapshot.CpuTemp = [math]::Round([double]$val, 1) }
                 if ($snapshot.DiskTemp -eq "N/A" -and $k -like "*Temperature*" -and ($k -like "*SSD*" -or $k -like "*ST1000*" -or $k -like "*Disk*")) { $snapshot.DiskTemp = [math]::Round([double]$val, 1) }
             }
+            # AMD fallbacks. They run only after the Intel/NCT6796D rules above and only fill what those left
+            # as N/A, so Intel results stay unchanged. SVI2 is the VRM-reported core voltage on AMD; the Super I/O
+            # Vcore input is board-specific there (0.464 V vs SVI2 1.175 V on ASUS TUF A520M-PLUS II).
+            if ($snapshot.CpuTemp -eq "N/A") {
+                foreach ($pattern in @("*Temperature_Core_(Tctl_Tdie)", "*Temperature_Core_(Tdie)", "*Temperature_Core_(Tctl)")) {
+                    $key = @($dict.Keys | Where-Object { $_ -like $pattern }) | Select-Object -First 1
+                    if ($key) { $snapshot.CpuTemp = [math]::Round([double]$dict[$key], 1); break }
+                }
+            }
+            if ($snapshot.CpuPower -eq "N/A") {
+                $key = @($dict.Keys | Where-Object { $_ -like "AMD_*_Power_Package" }) | Select-Object -First 1
+                if ($key) { $snapshot.CpuPower = "$($dict[$key])W" }
+            }
+            $key = @($dict.Keys | Where-Object { $_ -like "*Voltage_Core_(SVI2_TFN)" }) | Select-Object -First 1
+            if ($key) { $snapshot.Vcore = $dict[$key] }
             $snapshot.RawSummary = ($summaryParts -join "|")
         }
     } catch {

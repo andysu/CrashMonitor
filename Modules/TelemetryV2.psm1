@@ -17,6 +17,100 @@ function Initialize-CMTelemetry {
     }
 }
 
+function ConvertTo-CMSensorPrefix {
+    # Same normalisation as the sensor keys built in VoltageMonitor.psm1 (ReadAllSensors).
+    param([string]$Name)
+    return $Name.Replace(' ', '_').Replace('#', '').Replace('+', 'Plus_').Replace('/', '_')
+}
+
+$script:DiskInventory = $null
+function Get-CMDiskInventory {
+    # Read once per worker: disk models and buses do not change while the monitor runs.
+    if ($null -eq $script:DiskInventory) {
+        try { $script:DiskInventory = @(Get-PhysicalDisk -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ FriendlyName=[string]$_.FriendlyName; MediaType=[string]$_.MediaType; BusType=[string]$_.BusType } }) }
+        catch { $script:DiskInventory = @() }
+    }
+    return $script:DiskInventory
+}
+
+function Get-CMStorageTemperatures {
+    param([string]$RawSummary, $Disks = @())
+    $nvmeNand = $null; $nvmeCtrl = $null; $hddTemp = $null
+    $values = @{}
+    if ($RawSummary) {
+        foreach ($part in ($RawSummary -split '\|')) {
+            if ($part -match 'Samsung.*Temperature_Temperature_1:(\d+(\.\d+)?)' -or $part -match 'Samsung.*Temperature_Temperature:(\d+(\.\d+)?)') {
+                if ($null -eq $nvmeNand) { $nvmeNand = [double]$Matches[1] }
+            }
+            if ($part -match 'Samsung.*Temperature_Temperature_2:(\d+(\.\d+)?)') {
+                $nvmeCtrl = [double]$Matches[1]
+            }
+            if ($part -match 'ST1000.*Temperature:(\d+(\.\d+)?)') {
+                $hddTemp = [double]$Matches[1]
+            }
+            $i = $part.LastIndexOf(':')
+            if ($i -gt 0) { $values[$part.Substring(0, $i)] = $part.Substring($i + 1) }
+        }
+    }
+    # Other vendors only when the Samsung 980 / ST1000 rules above found nothing, so the server values are unchanged.
+    if ($null -eq $nvmeNand -and $null -eq $nvmeCtrl) {
+        $nvme = @($Disks | Where-Object { $_.BusType -eq 'NVMe' }) | Select-Object -First 1
+        if ($nvme) {
+            $prefix = ConvertTo-CMSensorPrefix $nvme.FriendlyName
+            if ($values.ContainsKey("${prefix}_Temperature_Temperature")) { $nvmeNand = [double]$values["${prefix}_Temperature_Temperature"] }
+            if ($values.ContainsKey("${prefix}_Temperature_Temperature_2")) { $nvmeCtrl = [double]$values["${prefix}_Temperature_Temperature_2"] }
+        }
+    }
+    if ($null -eq $hddTemp) {
+        foreach ($hdd in @($Disks | Where-Object { $_.MediaType -eq 'HDD' })) {
+            $key = "$(ConvertTo-CMSensorPrefix $hdd.FriendlyName)_Temperature_Temperature"
+            if ($values.ContainsKey($key)) { $hddTemp = [double]$values[$key]; break }
+        }
+    }
+    return [pscustomobject]@{ NvmeNand=$nvmeNand; NvmeCtrl=$nvmeCtrl; Hdd=$hddTemp }
+}
+
+function Get-CMSensorAlerts {
+    # Returns sensor key -> log message for every reading currently out of range.
+    param($Sensors, [string[]]$IgnoredTemperatureSensors = @())
+    $alerts = [ordered]@{}
+    if (-not $Sensors.RawSummary) { return $alerts }
+    foreach ($part in ($Sensors.RawSummary -split '\|')) {
+        if ($part -match 'Temperature.*:(\d+(\.\d+)?)') {
+            $deg = [double]$Matches[1]
+            $key = $part.Substring(0, $part.LastIndexOf(':'))
+            # Distance to TjMax is headroom below the throttle point, not a temperature: 70 there means a cool CPU.
+            if ($deg -lt 70.0 -or $key -like '*Distance_to_TjMax*') { continue }
+            # Configured per machine for Super I/O inputs that are not wired (they report e.g. 94-97C on an idle board).
+            if (@($IgnoredTemperatureSensors | Where-Object { $key -like $_ }).Count) { continue }
+            $alerts[$key] = "CRITICAL: High temperature warning: $part (${deg}C >= 70C)"
+        }
+    }
+    # ATX specification tolerances +/- 5%
+    foreach ($rail in @(@('Plus12V','+12V',11.40,12.60,'11.40V - 12.60V'),@('Plus5V','+5V',4.75,5.25,'4.75V - 5.25V'),@('Plus33V','+3.3V',3.135,3.465,'3.135V - 3.465V'))) {
+        $value = $Sensors[$rail[0]]
+        if ($value -ne 'N/A' -and [double]$value -gt 0) {
+            $v = [double]$value
+            if ($v -lt $rail[2] -or $v -gt $rail[3]) { $alerts[$rail[0]] = "WARNING: $($rail[1]) rail out of ATX spec: ${v}V (spec: $($rail[4]))" }
+        }
+    }
+    return $alerts
+}
+
+$script:ActiveSensorAlerts = @{}
+function Write-CMSensorAlertChanges {
+    # Logs an alert when it starts and when it clears instead of on every sample; the readings stay in telemetry-v2.csv.
+    param([string]$Root, [System.Collections.IDictionary]$Alerts)
+    foreach ($key in @($Alerts.Keys)) {
+        if (-not $script:ActiveSensorAlerts.ContainsKey($key)) { Write-CMLog $Root 'telemetry' $Alerts[$key] 'WARNING' }
+    }
+    foreach ($key in @($script:ActiveSensorAlerts.Keys)) {
+        if (-not $Alerts.Contains($key)) { Write-CMLog $Root 'telemetry' "Sensor alert cleared: $key" 'INFO' }
+    }
+    $script:ActiveSensorAlerts = @{}
+    foreach ($key in @($Alerts.Keys)) { $script:ActiveSensorAlerts[$key] = $Alerts[$key] }
+}
+
 function Get-CMTelemetry {
     param([string]$Root, [string]$CodeRoot, [hashtable]$Config, $Boot)
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -128,57 +222,16 @@ function Get-CMTelemetry {
                 $errors.Add('Hardware sensors returned no actual values')
             }
 
-            # High temperature threshold detection (warning at >= 70C)
+            # Temperature (>= 70C) and ATX rail alerts, logged when they start and clear
             if ($sensors.RawSummary) {
-                foreach ($part in ($sensors.RawSummary -split '\|')) {
-                    if ($part -match 'Temperature.*:(\d+(\.\d+)?)') {
-                        $deg = [double]$Matches[1]
-                        if ($deg -ge 70.0) {
-                            $alertMsg = "High temperature warning: $part (${deg}C >= 70C)"
-                            Write-CMLog $Root 'telemetry' "CRITICAL: $alertMsg" 'WARNING'
-                        }
-                    }
-                }
-            }
-
-            # Voltage rail threshold detection (ATX specification tolerances +/- 5%)
-            if ($sensors.RawSummary) {
-                if ($sensors.Plus12V -ne 'N/A' -and [double]$sensors.Plus12V -gt 0) {
-                    $v12 = [double]$sensors.Plus12V
-                    if ($v12 -lt 11.40 -or $v12 -gt 12.60) {
-                        Write-CMLog $Root 'telemetry' "WARNING: +12V rail out of ATX spec: ${v12}V (spec: 11.40V - 12.60V)" 'WARNING'
-                    }
-                }
-                if ($sensors.Plus5V -ne 'N/A' -and [double]$sensors.Plus5V -gt 0) {
-                    $v5 = [double]$sensors.Plus5V
-                    if ($v5 -lt 4.75 -or $v5 -gt 5.25) {
-                        Write-CMLog $Root 'telemetry' "WARNING: +5V rail out of ATX spec: ${v5}V (spec: 4.75V - 5.25V)" 'WARNING'
-                    }
-                }
-                if ($sensors.Plus33V -ne 'N/A' -and [double]$sensors.Plus33V -gt 0) {
-                    $v33 = [double]$sensors.Plus33V
-                    if ($v33 -lt 3.135 -or $v33 -gt 3.465) {
-                        Write-CMLog $Root 'telemetry' "WARNING: +3.3V rail out of ATX spec: ${v33}V (spec: 3.135V - 3.465V)" 'WARNING'
-                    }
-                }
+                Write-CMSensorAlertChanges $Root (Get-CMSensorAlerts $sensors @(Get-CMValue $Config 'IgnoredTemperatureSensors' @()))
             }
 
             # Dedicated real-time temperatures.csv logger
             try {
-                $nvmeNand = $null; $nvmeCtrl = $null; $hddTemp = $null; $tempAlert = ''
-                if ($sensors.RawSummary) {
-                    foreach ($part in ($sensors.RawSummary -split '\|')) {
-                        if ($part -match 'Samsung.*Temperature_Temperature_1:(\d+(\.\d+)?)' -or $part -match 'Samsung.*Temperature_Temperature:(\d+(\.\d+)?)') {
-                            if ($null -eq $nvmeNand) { $nvmeNand = [double]$Matches[1] }
-                        }
-                        if ($part -match 'Samsung.*Temperature_Temperature_2:(\d+(\.\d+)?)') {
-                            $nvmeCtrl = [double]$Matches[1]
-                        }
-                        if ($part -match 'ST1000.*Temperature:(\d+(\.\d+)?)') {
-                            $hddTemp = [double]$Matches[1]
-                        }
-                    }
-                }
+                $tempAlert = ''
+                $storage = Get-CMStorageTemperatures $sensors.RawSummary @(Get-CMDiskInventory)
+                $nvmeNand = $storage.NvmeNand; $nvmeCtrl = $storage.NvmeCtrl; $hddTemp = $storage.Hdd
                 if (($nvmeCtrl -ge 70.0) -or ($nvmeNand -ge 70.0)) { $tempAlert = 'CRITICAL_HIGH_TEMP' }
                 elseif (($nvmeCtrl -ge 60.0) -or ($nvmeNand -ge 60.0)) { $tempAlert = 'WARNING_ELEVATED_TEMP' }
                 $tempRow = [ordered]@{
@@ -283,4 +336,4 @@ function Close-CMTelemetrySensor {
     } catch { }
 }
 
-Export-ModuleMember -Function Get-CMTelemetryColumns, Initialize-CMTelemetry, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor
+Export-ModuleMember -Function Get-CMTelemetryColumns, Initialize-CMTelemetry, Get-CMStorageTemperatures, Get-CMSensorAlerts, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor

@@ -116,6 +116,113 @@ try {
         $script:mockCpuFail=$true
         try { $warmUp=Initialize-CMTelemetry } finally { $script:mockCpuFail=$false }
         Assert-CM (-not $warmUp.Success -and $warmUp.Error -match 'Timed out') 'Failed telemetry warm-up is reported, not thrown'
+
+        # Hardware sensor mapping. The Intel set mirrors the server (i5-9400, NCT6796D, Samsung 980, ST1000) and its
+        # expected values were captured from the code before AMD support was added: they must never change.
+        # The AMD set is a real snapshot from a Ryzen 3 3200G / ASUS TUF GAMING A520M-PLUS II (NCT6798D) workstation.
+        $intelSensors=@'
+Nuvoton_NCT6796D_Control_Fan_1:60
+Nuvoton_NCT6796D_Voltage_Vcore:0.904
+Nuvoton_NCT6796D_Voltage_Voltage_2:1.016
+Nuvoton_NCT6796D_Voltage_AVCC:3.392
+Nuvoton_NCT6796D_Voltage_Plus_3.3V:3.344
+Nuvoton_NCT6796D_Voltage_Voltage_5:1.024
+Nuvoton_NCT6796D_Voltage_Voltage_6:2.024
+Nuvoton_NCT6796D_Voltage_3VSB:3.392
+Nuvoton_NCT6796D_Voltage_VBat:3.104
+Nuvoton_NCT6796D_Voltage_VTT:1.056
+Nuvoton_NCT6796D_Temperature_Temperature_1:35
+Nuvoton_NCT6796D_Temperature_Temperature_2:40
+Nuvoton_NCT6796D_Fan_Fan_2:1320.5
+Intel_Core_i5-9400_Load_CPU_Total:12.5
+Intel_Core_i5-9400_Temperature_CPU_Core_1:38
+Intel_Core_i5-9400_Temperature_CPU_Core_2:39
+Intel_Core_i5-9400_Temperature_CPU_Core_1_Distance_to_TjMax:62
+Intel_Core_i5-9400_Temperature_CPU_Core_2_Distance_to_TjMax:61
+Intel_Core_i5-9400_Temperature_CPU_Package:42
+Intel_Core_i5-9400_Temperature_Core_Max:41
+Intel_Core_i5-9400_Power_CPU_Package:18.512
+Intel_Core_i5-9400_Power_CPU_Cores:10.204
+Intel_Core_i5-9400_Voltage_CPU_Core:0.85
+Samsung_SSD_980_1TB_Temperature_Temperature:41
+Samsung_SSD_980_1TB_Level_Available_Spare:100
+Samsung_SSD_980_1TB_Temperature_Temperature_2:52
+ST1000DM010-2EP102_Temperature_Temperature:34
+'@
+        $amdSensors=@'
+Nuvoton_NCT6798D_Voltage_Vcore:0.464
+Nuvoton_NCT6798D_Voltage_Voltage_2:1.008
+Nuvoton_NCT6798D_Voltage_AVCC:3.376
+Nuvoton_NCT6798D_Voltage_Plus_3.3V:3.344
+Nuvoton_NCT6798D_Voltage_Voltage_6:0.888
+Nuvoton_NCT6798D_Voltage_3VSB:3.376
+Nuvoton_NCT6798D_Voltage_VBat:3.312
+Nuvoton_NCT6798D_Voltage_VTT:0.896
+Nuvoton_NCT6798D_Temperature_Temperature_1:35
+Nuvoton_NCT6798D_Temperature_Temperature_3:94
+Nuvoton_NCT6798D_Temperature_Temperature_6:97
+Nuvoton_NCT6798D_Fan_Fan_2:1220.615
+AMD_Ryzen_3_3200G_with_Radeon_Vega_Graphics_Load_CPU_Total:26.103
+AMD_Ryzen_3_3200G_with_Radeon_Vega_Graphics_Power_Package:10.455
+AMD_Ryzen_3_3200G_with_Radeon_Vega_Graphics_Voltage_Core_1_VID:1.188
+AMD_Ryzen_3_3200G_with_Radeon_Vega_Graphics_Temperature_Core_(Tctl_Tdie):37
+AMD_Ryzen_3_3200G_with_Radeon_Vega_Graphics_Voltage_Core_(SVI2_TFN):1.175
+IR-SSDPR-S25A-120_Temperature_Temperature:33
+KINGSTON_SNV2S500G_Temperature_Temperature:38
+KINGSTON_SNV2S500G_Level_Available_Spare:100
+KINGSTON_SNV2S500G_Temperature_Temperature_2:47
+TOSHIBA_DT01ACA100_Temperature_Temperature:34
+ST1000DM010-2EP102_Temperature_Temperature:32
+'@
+        $toSensorDict={ param($text) $d=[ordered]@{}; foreach ($line in ($text -split "`r?`n")) { if ($line) { $i=$line.LastIndexOf(':'); $d[$line.Substring(0,$i)]=[double]::Parse($line.Substring($i+1),[Globalization.CultureInfo]::InvariantCulture) } }; $d }
+        $sensorReader=[pscustomobject]@{Data=$null}; $sensorReader | Add-Member ScriptMethod ReadAllSensors { $this.Data }
+        Import-Module (Join-Path $root 'Modules/VoltageMonitor.psm1') -Force
+        $voltage=Get-Module VoltageMonitor
+        & $voltage { param($r) $script:ReaderObj=$r; $script:LibLoaded=$true } $sensorReader
+        $workstationDisks=@([pscustomobject]@{FriendlyName='IR-SSDPR-S25A-120';MediaType='SSD';BusType='SATA'},[pscustomobject]@{FriendlyName='KINGSTON SNV2S500G';MediaType='SSD';BusType='NVMe'},[pscustomobject]@{FriendlyName='ST1000DM010-2EP102';MediaType='HDD';BusType='SATA'},[pscustomobject]@{FriendlyName='TOSHIBA DT01ACA100';MediaType='HDD';BusType='SATA'})
+        try {
+            $sensorReader.Data=& $toSensorDict $intelSensors
+            $intel=Get-CrashMonitorVoltageSnapshot
+            Assert-CM ($intel.Vcore -eq 0.904 -and $intel.Plus12V -eq 12.192 -and $intel.Plus5V -eq 5.06 -and $intel.Plus33V -eq 3.344 -and $intel.AVCC -eq 3.392 -and $intel['3VSB'] -eq 3.392 -and $intel.VBat -eq 3.104 -and $intel.VTT -eq 1.056) 'Server sensors: NCT6796D rails including derived +12V/+5V are unchanged'
+            Assert-CM ($intel.CpuTemp -eq 38 -and $intel.CpuPower -eq '18.512W' -and $intel.DiskTemp -eq 41 -and $intel.Status -eq 'OK') 'Server sensors: i5-9400 temperature/power and Samsung 980 disk temperature are unchanged'
+            $intelStorage=Get-CMStorageTemperatures $intel.RawSummary $workstationDisks
+            Assert-CM ($intelStorage.NvmeNand -eq 41 -and $intelStorage.NvmeCtrl -eq 52 -and $intelStorage.Hdd -eq 34) 'Server sensors: Samsung 980 and ST1000 keep priority in temperatures.csv over other NVMe/HDD disks'
+            Assert-CM (@((Get-CMSensorAlerts $intel).Keys).Count -eq 0) 'Server sensors: normal readings raise no alerts'
+            $sensorReader.Data=& $toSensorDict ($intelSensors -replace 'CPU_Package:42','CPU_Package:85' -replace 'Distance_to_TjMax:62','Distance_to_TjMax:75')
+            $hot=Get-CMSensorAlerts (Get-CrashMonitorVoltageSnapshot)
+            Assert-CM ((@($hot.Keys) -join ',') -eq 'Intel_Core_i5-9400_Temperature_CPU_Package') 'Hot CPU package alerts; Distance to TjMax is headroom and never alerts'
+
+            $sensorReader.Data=& $toSensorDict $amdSensors
+            $amd=Get-CrashMonitorVoltageSnapshot
+            Assert-CM ($amd.CpuTemp -eq 37 -and $amd.CpuPower -eq '10.455W' -and $amd.Vcore -eq 1.175) 'AMD sensors: Tctl/Tdie, package power and SVI2 core voltage are mapped'
+            Assert-CM ($amd.Plus12V -eq 'N/A' -and $amd.Plus5V -eq 'N/A' -and $amd.Plus33V -eq 3.344) 'AMD sensors: rails without a known divider stay N/A instead of guessed'
+            $amdStorage=Get-CMStorageTemperatures $amd.RawSummary $workstationDisks
+            Assert-CM ($amdStorage.NvmeNand -eq 38 -and $amdStorage.NvmeCtrl -eq 47 -and $amdStorage.Hdd -eq 32) 'temperatures.csv records any NVMe vendor when no Samsung 980 is present'
+            $noSeagate=Get-CMStorageTemperatures ($amd.RawSummary -replace '\|?ST1000DM010-2EP102_Temperature_Temperature:32','') $workstationDisks
+            Assert-CM ($noSeagate.Hdd -eq 34) 'temperatures.csv records any HDD vendor when no ST1000 is present'
+            Assert-CM ((@((Get-CMSensorAlerts $amd).Keys) -join ',') -eq 'Nuvoton_NCT6798D_Temperature_Temperature_3,Nuvoton_NCT6798D_Temperature_Temperature_6') 'Unwired Super I/O inputs alert until they are listed in IgnoredTemperatureSensors'
+            Assert-CM (@((Get-CMSensorAlerts $amd @('*NCT6798D_Temperature_Temperature_3','*NCT6798D_Temperature_Temperature_6')).Keys).Count -eq 0) 'IgnoredTemperatureSensors silences only the listed inputs'
+
+            # Alerts reach telemetry.log once when they start and once when they clear, not on every sample.
+            $alertRoot=Join-Path $temp 'alerts'
+            $hwCfg=$cfg.Clone(); $hwCfg.EnableHardwareSensors=$true
+            function global:Get-PhysicalDisk { param($ErrorAction) $workstationDisks }
+            & (Get-Module TelemetryV2) { $script:DiskInventory=$null; $script:ActiveSensorAlerts=@{} }
+            1..3 | ForEach-Object { [void](Get-CMTelemetry $alertRoot $root $hwCfg ([pscustomobject]@{BootKey='fixture'})) }
+            $alertLog=@(Get-Content (Join-Path $alertRoot 'Evidence/Logs/telemetry.log'))
+            Assert-CM ($alertLog.Count -eq 2 -and @($alertLog | Where-Object { $_ -match '\[WARNING\] CRITICAL: High temperature warning: Nuvoton_NCT6798D_Temperature_Temperature_[36]' }).Count -eq 2) 'Active sensor alerts are logged once, not on every sample'
+            $sensorReader.Data=& $toSensorDict ($amdSensors -replace 'Temperature_3:94','Temperature_3:40')
+            [void](Get-CMTelemetry $alertRoot $root $hwCfg ([pscustomobject]@{BootKey='fixture'}))
+            $alertLog=@(Get-Content (Join-Path $alertRoot 'Evidence/Logs/telemetry.log'))
+            Assert-CM ($alertLog.Count -eq 3 -and $alertLog[-1] -match '\[INFO\] Sensor alert cleared: Nuvoton_NCT6798D_Temperature_Temperature_3$') 'A cleared sensor alert is logged once'
+            $tempRows=@(Import-Csv (Join-Path $alertRoot 'Evidence/Logs/temperatures.csv') -Delimiter ';')
+            Assert-CM ($tempRows.Count -eq 4 -and $tempRows[-1].NVMe_NAND_C -eq '38' -and $tempRows[-1].NVMe_Controller_C -eq '47' -and $tempRows[-1].HDD_C -eq '32') 'Collector writes NVMe and HDD temperatures for non-server hardware'
+        } finally {
+            & $voltage { $script:ReaderObj=$null; $script:LibLoaded=$false }
+            Remove-Module VoltageMonitor -ErrorAction SilentlyContinue
+            Remove-Item Function:global:Get-PhysicalDisk -ErrorAction SilentlyContinue
+            & (Get-Module TelemetryV2) { $script:DiskInventory=$null; $script:ActiveSensorAlerts=@{} }
+        }
     } finally {
         Remove-Item Function:global:Get-CimInstance -ErrorAction SilentlyContinue
         if ($oldCimFunction) { Set-Item Function:global:Get-CimInstance $oldCimFunction.ScriptBlock }
