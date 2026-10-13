@@ -123,16 +123,56 @@ namespace CrashMonitorVoltage {
     }
 }
 
+# Background initialisation: Add-Type compilation plus the driver load take ~13 s, which used to stall the
+# first telemetry sample after every monitor start. A separate runspace in the same process does that work;
+# the compiled type is shared by the whole process and the reader it returns is a plain .NET object.
+$script:ModulePath = $PSCommandPath
+$script:InitPipeline = $null
+$script:InitHandle = $null
+$script:InitFailed = $false
+$script:BackgroundInitScript = {
+    param([string]$ModulePath, [string]$ToolsDir)
+    Import-Module $ModulePath
+    if (Initialize-CrashMonitorVoltageSensor -ToolsDir $ToolsDir) { & (Get-Module VoltageMonitor) { $script:ReaderObj } }
+}
+
+function Receive-CrashMonitorVoltageSensorInit {
+    # Returns 'Ready', 'Pending' or 'Failed'; starts the background initialisation on first use.
+    param([string]$ToolsDir)
+    if ($script:LibLoaded -and $script:ReaderObj) { return 'Ready' }
+    if ($script:InitFailed) { return 'Failed' }
+    if (-not $script:InitPipeline) {
+        $script:InitPipeline = [PowerShell]::Create()
+        [void]$script:InitPipeline.AddScript($script:BackgroundInitScript.ToString()).AddArgument($script:ModulePath).AddArgument($ToolsDir)
+        $script:InitHandle = $script:InitPipeline.BeginInvoke()
+        return 'Pending'
+    }
+    if (-not $script:InitHandle.IsCompleted) { return 'Pending' }
+    $reader = $null
+    try { $reader = @($script:InitPipeline.EndInvoke($script:InitHandle)) | Where-Object { $null -ne $_ } | Select-Object -First 1 } catch { }
+    finally { $script:InitPipeline.Dispose(); $script:InitPipeline = $null; $script:InitHandle = $null }
+    if ($reader) { $script:ReaderObj = $reader; $script:LibLoaded = $true; return 'Ready' }
+    $script:InitFailed = $true
+    return 'Failed'
+}
+
 function Get-CrashMonitorVoltageSnapshot {
     [CmdletBinding()]
     param(
-        [string]$ToolsDir = "C:\CrashMonitor\Tools\LibreHardwareMonitor"
+        [string]$ToolsDir = "C:\CrashMonitor\Tools\LibreHardwareMonitor",
+        [switch]$Background
     )
 
     if (-not $script:LibLoaded) {
-        $initRes = Initialize-CrashMonitorVoltageSensor -ToolsDir $ToolsDir
-        if (-not $initRes) {
-            return @{ Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Status = "DISABLED" }
+        if ($Background) {
+            $state = Receive-CrashMonitorVoltageSensorInit -ToolsDir $ToolsDir
+            if ($state -eq 'Pending') { return @{ Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Status = "INITIALIZING" } }
+            if ($state -eq 'Failed') { return @{ Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Status = "DISABLED" } }
+        } else {
+            $initRes = Initialize-CrashMonitorVoltageSensor -ToolsDir $ToolsDir
+            if (-not $initRes) {
+                return @{ Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Status = "DISABLED" }
+            }
         }
     }
 
@@ -237,11 +277,16 @@ function Write-CrashMonitorVoltageLog {
 function Close-CrashMonitorVoltageSensor {
     [CmdletBinding()]
     param()
+    if ($script:InitPipeline) {
+        try { $script:InitPipeline.Stop(); $script:InitPipeline.Dispose() } catch { }
+        $script:InitPipeline = $null; $script:InitHandle = $null
+    }
     if ($script:ReaderObj) {
         try { $script:ReaderObj.Close() } catch { }
         $script:ReaderObj = $null
     }
     $script:LibLoaded = $false
+    $script:InitFailed = $false
 }
 
 Export-ModuleMember -Function Initialize-CrashMonitorVoltageSensor, Get-CrashMonitorVoltageSnapshot, Write-CrashMonitorVoltageLog, Close-CrashMonitorVoltageSensor

@@ -264,6 +264,35 @@ ST1000DM010-2EP102_Temperature_Temperature:32
             Remove-Item Function:\Get-PhysicalDisk -ErrorAction SilentlyContinue
             & (Get-Module TelemetryV2) { $script:DiskInventory=$null; $script:ActiveSensorAlerts=@{} }
         }
+
+        # Background sensor initialisation: the first samples must not wait ~13 s for Add-Type and the driver.
+        # The fake reader is a compiled type because script methods must not cross runspaces.
+        if (-not ('CrashMonitorTest.FakeVoltageReader' -as [type])) {
+            Add-Type -TypeDefinition 'namespace CrashMonitorTest { public class FakeVoltageReader { public System.Collections.Generic.Dictionary<string,double> ReadAllSensors() { var d = new System.Collections.Generic.Dictionary<string,double>(); d["Nuvoton_NCT6796D_Voltage_Vcore"] = 0.9; d["Intel_Core_i5-9400_Temperature_CPU_Package"] = 42; return d; } public void Close() { } } }'
+        }
+        Import-Module (Join-Path $root 'Modules/VoltageMonitor.psm1') -Force
+        $voltage=Get-Module VoltageMonitor
+        try {
+            & $voltage { $script:BackgroundInitScript={ param($ModulePath,$ToolsDir) Start-Sleep -Milliseconds 1500; New-Object CrashMonitorTest.FakeVoltageReader } }
+            $initTimer=[Diagnostics.Stopwatch]::StartNew()
+            $pending=Get-CrashMonitorVoltageSnapshot -ToolsDir $temp -Background
+            $pendingMs=$initTimer.ElapsedMilliseconds
+            $initCfg=$cfg.Clone(); $initCfg.EnableHardwareSensors=$true; $initCfg.UsePerformanceCounters=$false
+            $initRoot=Join-Path $temp 'sensor-init'
+            $initRow=Get-CMTelemetry $initRoot $root $initCfg ([pscustomobject]@{BootKey='fixture'})
+            Assert-CM ($pending.Status -eq 'INITIALIZING' -and $pendingMs -lt 1000 -and $initRow.TemperatureStatus -in @('SENSORS_INITIALIZING','ACPI_WMI') -and $initRow.ErrorsJson -eq '[]' -and @(Import-Csv (Join-Path $initRoot 'Evidence/Logs/temperatures.csv') -Delimiter ';' -ErrorAction SilentlyContinue | Where-Object Status -ne 'ACPI_WMI').Count -eq 0) 'Samples taken while sensors initialise in the background are not delayed and report SENSORS_INITIALIZING without errors'
+            $ready=$null
+            for ($i=0; $i -lt 50 -and (-not $ready -or $ready.Status -eq 'INITIALIZING'); $i++) { Start-Sleep -Milliseconds 200; $ready=Get-CrashMonitorVoltageSnapshot -ToolsDir $temp -Background }
+            Assert-CM ($ready.Status -eq 'OK' -and $ready.Vcore -eq 0.9 -and $ready.CpuTemp -eq 42) 'Sensors appear in the next sample once background initialisation finishes'
+            Close-CrashMonitorVoltageSensor
+            & $voltage { $script:BackgroundInitScript={ param($ModulePath,$ToolsDir) $null } }
+            $failed=Get-CrashMonitorVoltageSnapshot -ToolsDir $temp -Background
+            for ($i=0; $i -lt 50 -and $failed.Status -eq 'INITIALIZING'; $i++) { Start-Sleep -Milliseconds 200; $failed=Get-CrashMonitorVoltageSnapshot -ToolsDir $temp -Background }
+            Assert-CM ($failed.Status -eq 'DISABLED') 'A failed background initialisation reports DISABLED and is not retried every sample'
+        } finally {
+            Close-CrashMonitorVoltageSensor
+            Remove-Module VoltageMonitor -ErrorAction SilentlyContinue
+        }
     } finally {
         Remove-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue
         if ($oldCimFunction) { Set-Item Function:\Get-CimInstance $oldCimFunction.ScriptBlock }

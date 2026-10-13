@@ -305,9 +305,12 @@ function Get-CMTelemetry {
                 $vmPath = Join-Path $CodeRoot 'Modules/VoltageMonitor.psm1'
                 if (Test-Path -LiteralPath $vmPath) { Import-Module $vmPath -ErrorAction SilentlyContinue }
             }
-            $sensors=Get-CrashMonitorVoltageSnapshot -ToolsDir (Join-Path $Root 'Tools/LibreHardwareMonitor')
+            # -Background: the ~13 s driver/Add-Type initialisation runs in another runspace instead of stalling this sample.
+            $sensors=Get-CrashMonitorVoltageSnapshot -ToolsDir (Join-Path $Root 'Tools/LibreHardwareMonitor') -Background
             $row.HardwareSensorsJson=$sensors | ConvertTo-Json -Compress
-            if ($sensors.CpuTemp -ne 'N/A' -or $sensors.DiskTemp -ne 'N/A' -or $sensors.RawSummary -match 'Temperature') {
+            if ($sensors.Status -eq 'INITIALIZING') {
+                $row.TemperatureStatus = 'SENSORS_INITIALIZING'
+            } elseif ($sensors.CpuTemp -ne 'N/A' -or $sensors.DiskTemp -ne 'N/A' -or $sensors.RawSummary -match 'Temperature') {
                 $row.TemperatureStatus = 'OK'
                 $hardwareSensorsLogged = $true
             } elseif ($sensors.RawSummary) {
@@ -322,8 +325,8 @@ function Get-CMTelemetry {
                 Write-CMSensorAlertChanges $Root (Get-CMSensorAlerts $sensors @(Get-CMValue $Config 'IgnoredTemperatureSensors' @()))
             }
 
-            # Dedicated real-time temperatures.csv logger
-            try {
+            # Dedicated real-time temperatures.csv logger (nothing to log until the sensors are initialised)
+            if ($sensors.Status -ne 'INITIALIZING') { try {
                 $tempAlert = ''
                 $storage = Get-CMStorageTemperatures $sensors.RawSummary @(Get-CMDiskInventory)
                 $nvmeNand = $storage.NvmeNand; $nvmeCtrl = $storage.NvmeCtrl; $hddTemp = $storage.Hdd
@@ -339,7 +342,7 @@ function Get-CMTelemetry {
                     Alert = $tempAlert
                 }
                 Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/temperatures.csv') -Columns @('Utc','Local','NVMe_NAND_C','NVMe_Controller_C','HDD_C','Status','Alert') -Row $tempRow
-            } catch { }
+            } catch { } }
         } catch { $errors.Add("Hardware sensors: $_") }
     }
 
