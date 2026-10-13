@@ -224,6 +224,14 @@ ST1000DM010-2EP102_Temperature_Temperature:32
             Assert-CM ($noSeagate.Hdd -eq 34) 'temperatures.csv records any HDD vendor when no ST1000 is present'
             Assert-CM ((@((Get-CMSensorAlerts $amd).Keys) -join ',') -eq 'Nuvoton_NCT6798D_Temperature_Temperature_3,Nuvoton_NCT6798D_Temperature_Temperature_6') 'Unwired Super I/O inputs alert until they are listed in IgnoredTemperatureSensors'
             Assert-CM (@((Get-CMSensorAlerts $amd @('*NCT6798D_Temperature_Temperature_3','*NCT6798D_Temperature_Temperature_6')).Keys).Count -eq 0) 'IgnoredTemperatureSensors silences only the listed inputs'
+            # telemetry-v2.csv: full sensor list every SensorFullSummaryIntervalSeconds, essential entries in between.
+            $slimRoot=Join-Path $temp 'slim'
+            & (Get-Module TelemetryV2) { $script:LastFullSensorSummaryUtc=[datetime]::MinValue }
+            $slimRow=[ordered]@{ SchemaVersion=2; Utc='2026-10-13T10:00:00.0000000Z'; BootKey='S'; HardwareSensorsJson=(($amd | ConvertTo-Json -Compress) -replace 'Nuvoton_NCT6798D_Fan_Fan_2','Load_CPU_Total:5|Nuvoton_NCT6798D_Fan_Fan_2') }
+            Write-CMTelemetry $slimRoot $slimRow @{ SensorFullSummaryIntervalSeconds=30 }
+            Write-CMTelemetry $slimRoot $slimRow @{ SensorFullSummaryIntervalSeconds=30 }
+            $slimRows=@(Import-Csv (Join-Path $slimRoot 'Evidence/Logs/telemetry-v2.csv') -Delimiter ';' | ForEach-Object { $_.HardwareSensorsJson | ConvertFrom-Json })
+            Assert-CM ($slimRows[0].RawSummary -match 'Load_CPU_Total' -and $slimRows[1].RawSummary -notmatch 'Load_' -and $slimRows[1].RawSummary -match 'Temperature_Core_\(Tctl_Tdie\):37' -and $slimRows[1].RawSummary -match 'Fan_Fan_2:1220' -and $slimRows[1].RawSummaryScope -eq 'Essential' -and $slimRows[1].Vcore -eq 1.175) 'telemetry-v2.csv keeps the full sensor list periodically and temperatures, voltages, power and fans in every row'
             $packetRoot=Join-Path $temp 'packet'
             Write-CMJson (Join-Path $packetRoot 'Evidence/State/hardware-event-counts.json') @{ BootKey='BOOTP'; Whea=2; Storage=5; Thermal=1 }
             $packetRow=[ordered]@{ Utc='2026-10-13T10:00:00.0000000Z'; BootKey='BOOTP'; CpuUsagePct=12; RamUsedPct=80; RamAvailableMB=2048; DiskQueueLength=0; IoLatencyMs=4; TemperatureStatus='OK'; HardwareSensorsJson=($amd | ConvertTo-Json -Compress) }
@@ -388,6 +396,8 @@ ST1000DM010-2EP102_Temperature_Temperature:32
     Assert-CM ($ata.ReallocatedSectors -eq 0 -and $ata.PendingSectors -eq 8 -and $ata.OfflineUncorrectable -eq 8 -and $ata.CrcErrors -eq 3 -and $ata.CommandTimeouts -eq 2 -and $ata.UnsafeShutdowns -eq 210 -and $ata.PowerCycles -eq 1520 -and $ata.PowerOnHours -eq 41234 -and $ata.SmartPassed -eq $true) 'smartctl ATA attributes 5/12/187/188/192/197/198/199 are mapped'
     $packedAta=ConvertFrom-CMSmartctlJson (($ataJson -replace '"id":188,"raw":\{"value":2\}','"id":188,"raw":{"value":8590065669}') | ConvertFrom-Json) '/dev/sda'
     Assert-CM ($packedAta.CommandTimeouts -eq 5) 'Seagate packed attribute 188 (raw "2 2 5") is read as 5 command timeouts'
+    $toshiba=ConvertFrom-CMSmartctlJson (($ataJson -replace '"id":192,"raw":\{"value":210\}','"id":192,"raw":{"value":51281}},{"id":193,"raw":{"value":51281}') | ConvertFrom-Json) '/dev/sdb'
+    Assert-CM ($null -eq $toshiba.UnsafeShutdowns -and $toshiba.LoadUnloadCycles -eq 51281 -and $ata.UnsafeShutdowns -eq 210) 'Attribute 192 equal to the load/unload count (193) is not read as unsafe shutdowns'
     # The smartctl runner inside Get-CMSmartSnapshot: arguments must arrive and a large output must not block the process.
     $commonAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Modules/Common.psm1'),[ref]$null,[ref]$null)
     . ([scriptblock]::Create(($commonAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-ExecutableWithTimeout' },$true) | Select-Object -First 1).Extent.Text))
@@ -440,6 +450,24 @@ ST1000DM010-2EP102_Temperature_Temperature:32
     Assert-CM ($countState.Whea -eq 2 -and $countState.Storage -eq 1 -and $countState.Thermal -eq 1) 'Hardware event counters add WHEA, storage and throttling events of this boot only'
     Update-CMHardwareEventCounts -Root $countRoot -Boot ([pscustomobject]@{ BootKey='NEXT'; BootUtc='2026-10-13T10:00:00Z' }) -Events @()
     Assert-CM ((Read-CMJson (Join-Path $countRoot 'Evidence/State/hardware-event-counts.json')).Whea -eq 0) 'Hardware event counters restart on a new boot'
+    # Ntfs 147 latency that is really an S3 sleep (workstation, 2026-10-13: 00:03:12Z -> 05:03:36Z, LatencyMs 18018263).
+    $sleepRoot=Join-Path $temp 'sleep-counts'
+    $sleepBoot=[pscustomobject]@{ BootKey='BOOTS'; BootUtc='2026-10-07T23:53:00Z' }
+    $ntfs147={ param($utc,$ms) [pscustomobject]@{ Provider='Microsoft-Windows-Ntfs'; Channel='Microsoft-Windows-Ntfs/Operational'; Level=3; EventId=147; Utc=$utc; Data=[pscustomobject]@{ LatencyMs=$ms; MaxLatencyMs=30000; VolumeName='E:' } } }
+    $wake=[pscustomobject]@{ Provider='Microsoft-Windows-Power-Troubleshooter'; Channel='System'; Level=4; EventId=1; Utc='2026-10-13T05:03:38Z'; Data=[pscustomobject]@{ SleepTime='2026-10-13T00:03:12.1451258Z'; WakeTime='2026-10-13T05:03:36.8986281Z' } }
+    $summaryOnly=[pscustomobject]@{ Provider='Microsoft-Windows-Ntfs'; Channel='Microsoft-Windows-Ntfs/Operational'; Level=3; EventId=149; Utc='2026-10-13T06:01:28Z'; Data=[pscustomobject]@{ HighLatencyCount=1; FailedWriteCount=0; FailedReadCount=0; BadClusterHotfixCount=0 } }
+    $summaryFailed=[pscustomobject]@{ Provider='Microsoft-Windows-Ntfs'; Channel='Microsoft-Windows-Ntfs/Operational'; Level=3; EventId=149; Utc='2026-10-13T07:01:28Z'; Data=[pscustomobject]@{ HighLatencyCount=0; FailedWriteCount=0; FailedReadCount=2; BadClusterHotfixCount=0 } }
+    Assert-CM ((Get-CMHardwareEventCategory $wake) -eq 'Sleep' -and (Get-CMHardwareEventCategory (& $ntfs147 '2026-10-13T05:03:40Z' 18018263)) -eq 'StorageLatency' -and $null -eq (Get-CMHardwareEventCategory $summaryOnly) -and (Get-CMHardwareEventCategory $summaryFailed) -eq 'Storage') 'Sleep, Ntfs 147 latency and Ntfs 149 failures are classified; a latency-only 149 summary is not counted twice'
+    Update-CMHardwareEventCounts -Root $sleepRoot -Boot $sleepBoot -Events @((& $ntfs147 '2026-10-13T05:03:40Z' 18018263))
+    $beforeWake=(Read-CMJson (Join-Path $sleepRoot 'Evidence/State/hardware-event-counts.json')).Storage
+    Update-CMHardwareEventCounts -Root $sleepRoot -Boot $sleepBoot -Events @($wake, $summaryOnly)
+    $afterWake=Read-CMJson (Join-Path $sleepRoot 'Evidence/State/hardware-event-counts.json')
+    Assert-CM ($beforeWake -eq 1 -and $afterWake.Storage -eq 0 -and $afterWake.SleepInflatedLatency -eq 1) 'An Ntfs 147 latency explained by a sleep reported later is removed from StorageErrors'
+    Update-CMHardwareEventCounts -Root $sleepRoot -Boot $sleepBoot -Events @((& $ntfs147 '2026-10-13T08:00:00Z' 45000), (& $ntfs147 '2026-10-13T05:04:40Z' (18018263+60000)), $summaryFailed)
+    Assert-CM ((Read-CMJson (Join-Path $sleepRoot 'Evidence/State/hardware-event-counts.json')).Storage -eq 3) 'Real stalls stay counted, including one that continued 60 s past the wake-up'
+    Write-CMJson (Join-Path $sleepRoot 'Evidence/State/hardware-event-counts.json') @{ BootKey='BOOTS'; Whea=0; Storage=7; Thermal=0 }
+    Update-CMHardwareEventCounts -Root $sleepRoot -Boot $sleepBoot -Events @()
+    Assert-CM ((Read-CMJson (Join-Path $sleepRoot 'Evidence/State/hardware-event-counts.json')).Storage -eq 0) 'A counter state from before sleep-aware counting is restarted instead of carrying inflated values'
 
     # Remote heartbeat receiver: pure state logic, then a real UDP loopback run of Scripts/Receive-Heartbeat.ps1.
     $receiverPath=Join-Path $root 'Scripts/Receive-Heartbeat.ps1'

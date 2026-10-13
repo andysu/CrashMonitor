@@ -164,6 +164,9 @@ function ConvertFrom-CMSmartctlJson {
                 $row[$column]=$value
             }
         }
+        # Some drives (Toshiba DT01ACA100: 51 281 = 51 281) report the head load/unload count in 192 as well,
+        # so 192 is not an emergency-retract counter there and must not be read as unsafe shutdowns.
+        if ($null -ne $row.UnsafeShutdowns -and $row.UnsafeShutdowns -gt 0 -and $row.UnsafeShutdowns -eq $row.LoadUnloadCycles) { $row.UnsafeShutdowns=$null }
     }
     return $row
 }

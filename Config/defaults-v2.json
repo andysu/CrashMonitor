@@ -15,6 +15,7 @@
   "MaxIncidents": 100,
   "MaxEvidenceMB": 512,
   "EnableHardwareSensors": false,
+  "SensorFullSummaryIntervalSeconds": 30,
   "IgnoredTemperatureSensors": [],
   "EnableUdpHeartbeat": false,
   "UdpHeartbeatHost": "127.0.0.1",

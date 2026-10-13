@@ -10,6 +10,13 @@ function Get-CMValue {
     return $Default
 }
 
+function ConvertTo-CMUtcDate {
+    # PowerShell 7 ConvertFrom-Json already returns ISO dates as DateTime, 5.1 returns strings; accept both, culture-independent.
+    param($Value)
+    if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
+    return [datetime]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal)
+}
+
 function Write-CMJson {
     param([string]$Path, $Value)
     $dir = Split-Path -Parent $Path
@@ -394,15 +401,20 @@ function Get-CMSmartSnapshot {
                     # NVMe attributes
                     if ($devInfo.nvme_smart_health_information_log) {
                         $nvme = $devInfo.nvme_smart_health_information_log
-                        if ($nvme.unsafe_shutdowns) { $diskData.UnsafeShutdowns = [long]$nvme.unsafe_shutdowns }
-                        if ($nvme.power_cycles) { $diskData.PowerCycles = [long]$nvme.power_cycles }
+                        # 0 is a valid baseline: a later 1 is exactly the power loss this comparison looks for.
+                        if ($null -ne $nvme.unsafe_shutdowns) { $diskData.UnsafeShutdowns = [long]$nvme.unsafe_shutdowns }
+                        if ($null -ne $nvme.power_cycles) { $diskData.PowerCycles = [long]$nvme.power_cycles }
                     }
                     # ATA SMART attributes (ID 12 Power_Cycle_Count, ID 192 Power-Off_Retract_Count)
                     if ($devInfo.ata_smart_attributes -and $devInfo.ata_smart_attributes.table) {
+                        $loadUnload = $null
                         foreach ($attr in $devInfo.ata_smart_attributes.table) {
                             if ($attr.id -eq 12) { $diskData.PowerCycles = [long]$attr.raw.value }
                             if ($attr.id -eq 192) { $diskData.UnsafeShutdowns = [long]$attr.raw.value }
+                            if ($attr.id -eq 193) { $loadUnload = [long]$attr.raw.value }
                         }
+                        # Some drives (Toshiba DT01ACA100) repeat the load/unload count (193) in 192: not an emergency-retract counter.
+                        if ($null -ne $diskData.UnsafeShutdowns -and $diskData.UnsafeShutdowns -gt 0 -and $diskData.UnsafeShutdowns -eq $loadUnload) { $diskData.UnsafeShutdowns = $null }
                     }
                     $snapshot.Disks += [pscustomobject]$diskData
                 }

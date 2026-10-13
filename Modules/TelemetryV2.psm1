@@ -430,9 +430,37 @@ function Send-CMUdpHeartbeat {
     try { Send-CMUdpPacket -Config $Config -Payload (New-CMTelemetryPacket -Row $Row -Root $Root) } catch { }
 }
 
+$script:LastFullSensorSummaryUtc = [datetime]::MinValue
+function ConvertTo-CMEssentialSensorJson {
+    # Keeps temperatures, voltages, power and fan speeds in RawSummary and drops load, clock, throughput, data,
+    # level, factor and PWM entries: ~4.5 KB -> ~2.1 KB per row on the workstation. The stress-test thermal
+    # tripwire and Watch-LiveSensors read CPU package temperature and fans from RawSummary, so those stay in every row.
+    param([string]$Json)
+    $sensors = $Json | ConvertFrom-Json
+    if (-not $sensors.RawSummary) { return $Json }
+    $sensors.RawSummary = (@(([string]$sensors.RawSummary -split '\|') | Where-Object { $_ -match '_(Temperature|Voltage|Power)_|_Fan_Fan_' }) -join '|')
+    $sensors | Add-Member -NotePropertyName RawSummaryScope -NotePropertyValue 'Essential' -Force
+    return (ConvertTo-Json -InputObject $sensors -Compress)
+}
+
 function Write-CMTelemetry {
     param([string]$Root, [System.Collections.IDictionary]$Row, [hashtable]$Config = $null)
-    Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/telemetry-v2.csv') -Columns $script:Columns -Row $Row
+    $csvRow = $Row
+    if ($Config -and $Row.HardwareSensorsJson) {
+        # The full sensor list every SensorFullSummaryIntervalSeconds, the essential part in between: at 6.8 KB per row
+        # four hours of 3 s samples (32.6 MB) already exceeded MaxLogSizeMB 32 and pushed the pre-crash history to Archive.
+        $fullEvery = [double](Get-CMValue $Config 'SensorFullSummaryIntervalSeconds' 30)
+        $now = [datetime]::UtcNow
+        if ($fullEvery -gt 0 -and ($now - $script:LastFullSensorSummaryUtc).TotalSeconds -lt $fullEvery) {
+            try {
+                $csvRow = [ordered]@{}
+                foreach ($key in $Row.Keys) { $csvRow[$key] = $Row[$key] }
+                $csvRow.HardwareSensorsJson = ConvertTo-CMEssentialSensorJson $Row.HardwareSensorsJson
+            } catch { $csvRow = $Row }
+        } else { $script:LastFullSensorSummaryUtc = $now }
+    }
+    Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/telemetry-v2.csv') -Columns $script:Columns -Row $csvRow
+    # The remote packet always gets the full in-memory readings.
     if ($Config) { Send-CMUdpHeartbeat -Config $Config -Row $Row -Root $Root }
 }
 

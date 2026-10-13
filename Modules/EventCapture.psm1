@@ -30,10 +30,11 @@ function Get-CMEventXPath {
     if ($Channel -eq 'System') {
         $filter = "(Level=1 or Level=2 or EventID=1074 or EventID=6005 or EventID=6006 or EventID=6008 or EventID=12 or EventID=13 or EventID=37 or EventID=129 or EventID=153 or EventID=157 or EventID=219 or EventID=2004 or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-Kernel-Power'] or Provider[@Name='Microsoft-Windows-Kernel-Boot'] or Provider[@Name='Microsoft-Windows-Time-Service'] or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='volmgr'])"
         # Warning/information-level hardware events, bound to their provider so other sources reusing the ID are not captured:
-        # disk 51 paging I/O error; Ntfs 50 delayed write lost, 98 volume check, 140 flush failed; Display 4101 GPU TDR; Kernel-General 1 clock change.
+        # disk 51 paging I/O error; Ntfs 50 delayed write lost, 98 volume check, 140 flush failed; Display 4101 GPU TDR; Kernel-General 1 clock change;
+        # Power-Troubleshooter 1 sleep/wake times (explains Ntfs 147 latencies that include a sleep).
         # The event log rejects an XPath with more than ~22 OR terms, so these go into a second Select of one QueryList:
         # Windows returns the union in record order, which keeps the RecordId cursor valid.
-        $hardware = "((Provider[@Name='disk'] and EventID=51) or (Provider[@Name='Ntfs' or @Name='Microsoft-Windows-Ntfs'] and (EventID=50 or EventID=98 or EventID=140)) or (Provider[@Name='Display'] and EventID=4101) or (Provider[@Name='Microsoft-Windows-Kernel-General'] and EventID=1))"
+        $hardware = "((Provider[@Name='disk'] and EventID=51) or (Provider[@Name='Ntfs' or @Name='Microsoft-Windows-Ntfs'] and (EventID=50 or EventID=98 or EventID=140)) or (Provider[@Name='Display'] and EventID=4101) or (Provider[@Name='Microsoft-Windows-Kernel-General'] and EventID=1) or (Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1))"
         $selects = @("*[System[$bounds and $filter]]", "*[System[$bounds and $hardware]]") | ForEach-Object { "<Select Path='System'>$([Security.SecurityElement]::Escape($_))</Select>" }
         return "<QueryList><Query Id='0' Path='System'>$($selects -join '')</Query></QueryList>"
     } elseif ($Channel -eq 'Application') { $filter = '(Level=1 or Level=2 or EventID=1001 or EventID=2004 or Provider[@Name=''Microsoft-Windows-Resource-Exhaustion-Detector''])' }
@@ -143,30 +144,74 @@ function Get-CMHardwareEventCategory {
     $provider = [string]$Record.Provider; $channel = [string]$Record.Channel; $level = [int]$Record.Level
     if ($provider -eq 'Microsoft-Windows-WHEA-Logger' -or $channel -eq 'Microsoft-Windows-Kernel-WHEA/Errors') { return 'Whea' }
     if ($channel -eq 'Microsoft-Windows-Kernel-Power/Thermal-Operational' -or ($provider -eq 'Microsoft-Windows-Kernel-Processor-Power' -and [int]$Record.EventId -eq 37)) { return 'Thermal' }
+    $id = [int]$Record.EventId
+    if ($provider -eq 'Microsoft-Windows-Power-Troubleshooter' -and $id -eq 1) { return 'Sleep' }
+    if ($provider -eq 'Microsoft-Windows-Ntfs' -and $id -eq 147) { return 'StorageLatency' }
+    if ($provider -eq 'Microsoft-Windows-Ntfs' -and $id -eq 149) {
+        # Hourly summary: its high-latency count repeats the 147 events, so only real failures count.
+        $failures = 0
+        foreach ($name in 'FailedWriteCount','FailedReadCount','BadClusterHotfixCount') { $failures += [int](Get-CMValue $Record.Data $name 0) }
+        if ($failures -gt 0) { return 'Storage' }
+        return $null
+    }
     if ($channel -eq 'Microsoft-Windows-Storage-ClassPnP/Operational') { return 'Storage' }
     if ($provider -in @('disk','stornvme','storahci','storport','Ntfs','Microsoft-Windows-Ntfs') -and $level -ge 1 -and $level -le 3) { return 'Storage' }
     return $null
 }
 
+function Test-CMSleepInflatedLatency {
+    # Ntfs 147 measures wall-clock time, so an I/O issued just before sleep "takes" the whole sleep
+    # (18 018 263 ms over a 5 h S3 sleep on the workstation). Without the sleep it would be under the threshold.
+    param($Latency, [object[]]$Sleeps)
+    $end = ConvertTo-CMUtcDate $Latency.Utc
+    $start = $end.AddMilliseconds(-[double]$Latency.LatencyMs)
+    $sleptMs = 0.0
+    foreach ($sleep in @($Sleeps)) {
+        $from = ConvertTo-CMUtcDate $sleep.SleepUtc; $to = ConvertTo-CMUtcDate $sleep.WakeUtc
+        $overlapStart = if ($from -gt $start) { $from } else { $start }
+        $overlapEnd = if ($to -lt $end) { $to } else { $end }
+        if ($overlapEnd -gt $overlapStart) { $sleptMs += ($overlapEnd - $overlapStart).TotalMilliseconds }
+    }
+    return ($sleptMs -gt 0 -and ([double]$Latency.LatencyMs - $sleptMs) -lt [double]$Latency.ThresholdMs)
+}
+
 function Update-CMHardwareEventCounts {
     # Per-boot counters kept in State so the telemetry worker can include them in every remote packet.
+    # Sleep intervals (Power-Troubleshooter 1) can arrive after the Ntfs 147 events they explain,
+    # so latency events are kept and the Storage count is recomputed against all known sleeps.
     param([string]$Root, $Boot, [object[]]$Events)
     $path = Join-Path $Root 'Evidence/State/hardware-event-counts.json'
-    $counts = $null
-    try { $counts = Read-CMJson $path } catch { }
-    $reset = (-not $counts -or $counts.BootKey -ne $Boot.BootKey)
-    if ($reset) { $counts = [pscustomobject]@{ BootKey=$Boot.BootKey; Whea=0; Storage=0; Thermal=0 } }
+    $state = $null
+    try { $state = Read-CMJson $path } catch { }
+    # A state file written before sleep-aware counting (no StorageDirect) cannot be recomputed: start the counters again.
+    $reset = (-not $state -or $state.BootKey -ne $Boot.BootKey -or $null -eq (Get-CMValue $state 'StorageDirect'))
+    $whea = 0; $thermal = 0; $direct = 0
+    $latencies = New-Object Collections.Generic.List[object]; $sleeps = New-Object Collections.Generic.List[object]
+    if (-not $reset) {
+        $whea = [int]$state.Whea; $thermal = [int]$state.Thermal; $direct = [int]$state.StorageDirect
+        foreach ($item in @(Get-CMValue $state 'LatencyEvents' @())) { if ($item) { $latencies.Add($item) } }
+        foreach ($item in @(Get-CMValue $state 'Sleeps' @())) { if ($item) { $sleeps.Add($item) } }
+    }
     $bootUtc = [datetime]::Parse($Boot.BootUtc).ToUniversalTime()
     $added = 0
     foreach ($ev in @($Events)) {
         $category = Get-CMHardwareEventCategory $ev
         if (-not $category) { continue }
         # Backfilled history from before this boot belongs to earlier boots.
-        if ([datetime]::Parse($ev.Utc).ToUniversalTime() -lt $bootUtc) { continue }
-        $counts.$category = [int]$counts.$category + 1
+        if ((ConvertTo-CMUtcDate $ev.Utc) -lt $bootUtc) { continue }
+        switch ($category) {
+            'Whea' { $whea++ }
+            'Thermal' { $thermal++ }
+            'Storage' { $direct++ }
+            'Sleep' { $sleeps.Add([pscustomobject]@{ SleepUtc=(ConvertTo-CMUtcDate $ev.Data.SleepTime).ToString('o'); WakeUtc=(ConvertTo-CMUtcDate $ev.Data.WakeTime).ToString('o') }) }
+            'StorageLatency' { $latencies.Add([pscustomobject]@{ Utc=(ConvertTo-CMUtcDate $ev.Utc).ToString('o'); LatencyMs=[double](Get-CMValue $ev.Data 'LatencyMs' 0); ThresholdMs=[double](Get-CMValue $ev.Data 'MaxLatencyMs' 30000); Volume=[string](Get-CMValue $ev.Data 'VolumeName' '') }) }
+        }
         $added++
     }
-    if ($added -or $reset) { Write-CMJson $path @{ BootKey=$counts.BootKey; Whea=[int]$counts.Whea; Storage=[int]$counts.Storage; Thermal=[int]$counts.Thermal; UpdatedUtc=[datetime]::UtcNow.ToString('o') } }
+    if (-not ($added -or $reset)) { return }
+    $keptLatencies = @($latencies | Select-Object -Last 500); $keptSleeps = @($sleeps | Select-Object -Last 200)
+    $inflated = @($keptLatencies | Where-Object { Test-CMSleepInflatedLatency $_ $keptSleeps }).Count
+    Write-CMJson $path @{ BootKey=$Boot.BootKey; Whea=$whea; Storage=($direct + $keptLatencies.Count - $inflated); Thermal=$thermal; StorageDirect=$direct; SleepInflatedLatency=$inflated; LatencyEvents=$keptLatencies; Sleeps=$keptSleeps; UpdatedUtc=[datetime]::UtcNow.ToString('o') }
 }
 
 function Get-CMBootEvents {
