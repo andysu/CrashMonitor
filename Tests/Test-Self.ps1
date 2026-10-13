@@ -88,13 +88,16 @@ try {
     $rejected=$false;try { Write-CMCsv $csv @('Wrong') @{Wrong='x'} } catch { $rejected=$true }
     Assert-CM $rejected 'Schema mismatch is rejected without overwriting old data'
     $cols=@(Get-CMTelemetryColumns)
-    Assert-CM ($cols.Count -eq 23 -and @($cols | Select-Object -Unique).Count -eq $cols.Count) 'Telemetry schema has fixed unique columns'
+    Assert-CM ($cols.Count -eq 24 -and $cols[-1] -eq 'ProcessorPerformancePct' -and $cols[19] -eq 'HardwareSensorsJson' -and @($cols | Select-Object -Unique).Count -eq $cols.Count) 'Telemetry schema has fixed unique columns'
     $cfg=Get-CMConfig $temp $root
+    Assert-CM ($cfg.UsePerformanceCounters -eq $true) 'Persistent performance counters are the default collector'
+    # The WMI collector stays the fallback; these tests drive it through mocked CIM classes.
+    $cfg.UsePerformanceCounters=$false
     Assert-CM (-not $cfg.EnableHardwareSensors -and $cfg.SchemaVersion -eq 2) 'Hardware driver probing is opt-in'
     Assert-CM ($cfg.SampleIntervalSeconds -eq 3 -and $cfg.EventPollSeconds -eq 3 -and $cfg.HeartbeatIntervalSeconds -eq 2) 'Fresh install samples telemetry and events every 3 s with a 2 s heartbeat'
     # Mock only the OS data source; run the actual collector and CSV serializer.
     $script:mockAcpiResult = $null
-    $oldCimFunction=Get-Item Function:global:Get-CimInstance -ErrorAction SilentlyContinue
+    $oldCimFunction=Get-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue
     try {
         function global:Get-CimInstance {
             param([string]$ClassName,[string]$Filter,[int]$OperationTimeoutSec,[string]$Namespace)
@@ -103,6 +106,7 @@ try {
                 'Win32_OperatingSystem' { return [pscustomobject]@{FreePhysicalMemory=8388608;TotalVisibleMemorySize=33554432} }
                 'Win32_PerfFormattedData_PerfOS_Memory' { return [pscustomobject]@{CommittedBytes=4294967296;CommitLimit=34359738368;PoolNonpagedBytes=134217728;PoolPagedBytes=268435456;PagesPersec=4} }
                 'Win32_PerfFormattedData_PerfDisk_PhysicalDisk' { return [pscustomobject]@{Name='_Total';CurrentDiskQueueLength=2;DiskReadBytesPersec=1024;DiskWriteBytesPersec=2048;PercentDiskTime=3} }
+                'Win32_PerfFormattedData_Counters_ProcessorInformation' { return [pscustomobject]@{PercentProcessorPerformance=95} }
                 'MSAcpi_ThermalZoneTemperature' { return $script:mockAcpiResult }
                 default { throw "Unexpected fixture class: $ClassName" }
             }
@@ -110,6 +114,12 @@ try {
         $script:mockAcpiResult = $null
         $metrics=Get-CMTelemetry $temp $root $cfg ([pscustomobject]@{BootKey='fixture'})
         Assert-CM ($metrics.CpuUsagePct -eq 37 -and $metrics.RamAvailableMB -eq 8192 -and $metrics.RamUsedPct -eq 75 -and $metrics.CommittedMB -eq 4096) 'Actual telemetry collector converts CIM memory units and CPU correctly'
+        Assert-CM ($metrics.ProcessorPerformancePct -eq 95) 'WMI fallback records % Processor Performance for throttling detection'
+        $fallbackCfg=$cfg.Clone(); $fallbackCfg.UsePerformanceCounters=$true
+        & (Get-Module TelemetryV2) { $script:FastCounters=$false }
+        $fallbackMetrics=Get-CMTelemetry $temp $root $fallbackCfg ([pscustomobject]@{BootKey='fixture'})
+        & (Get-Module TelemetryV2) { $script:FastCounters=$null }
+        Assert-CM ($fallbackMetrics.CpuUsagePct -eq 37 -and $fallbackMetrics.RamAvailableMB -eq 8192 -and $fallbackMetrics.ErrorsJson -eq '[]') 'Collector falls back to WMI when performance counters are unavailable'
         Assert-CM ($metrics.ErrorsJson -eq '[]' -and $metrics.TemperatureStatus -eq 'NOT_MEASURED' -and $metrics.DiskQueueLength -eq 2) 'Collector records unavailable temperature honestly and preserves disk queue'
         Write-CMTelemetry $temp $metrics
         $roundtrip=Import-Csv (Join-Path $temp 'Evidence/Logs/telemetry-v2.csv') -Delimiter ';'
@@ -243,13 +253,24 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         } finally {
             & $voltage { $script:ReaderObj=$null; $script:LibLoaded=$false }
             Remove-Module VoltageMonitor -ErrorAction SilentlyContinue
-            Remove-Item Function:global:Get-PhysicalDisk -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-PhysicalDisk -ErrorAction SilentlyContinue
             & (Get-Module TelemetryV2) { $script:DiskInventory=$null; $script:ActiveSensorAlerts=@{} }
         }
     } finally {
-        Remove-Item Function:global:Get-CimInstance -ErrorAction SilentlyContinue
-        if ($oldCimFunction) { Set-Item Function:global:Get-CimInstance $oldCimFunction.ScriptBlock }
+        Remove-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue
+        if ($oldCimFunction) { Set-Item Function:\Get-CimInstance $oldCimFunction.ScriptBlock }
     }
+    # Real persistent counters on this machine (no mocks): sane values, per-disk breakdown, no collector errors.
+    & (Get-Module TelemetryV2) { $script:FastCounters=$null; $script:DiskInstanceKey=$null }
+    $fastCfg=$cfg.Clone(); $fastCfg.UsePerformanceCounters=$true
+    $fastMetrics=Get-CMTelemetry $temp $root $fastCfg ([pscustomobject]@{BootKey='fixture'})
+    if ((Get-CMCounterMode) -eq 'PerformanceCounter') {
+        $fastDisks=@($fastMetrics.DiskCountersJson | ConvertFrom-Json | ForEach-Object { $_ })
+        Assert-CM ($fastMetrics.CpuUsagePct -ge 0 -and $fastMetrics.CpuUsagePct -le 100 -and $fastMetrics.RamAvailableMB -gt 0 -and $fastMetrics.RamUsedPct -gt 0 -and $fastMetrics.RamUsedPct -lt 100 -and $fastMetrics.CommittedMB -gt 0 -and $fastMetrics.ProcessorPerformancePct -gt 0 -and @($fastDisks | Where-Object Name -eq '_Total').Count -eq 1 -and $fastMetrics.ErrorsJson -eq '[]') 'Persistent performance counters give CPU, RAM, commit, per-disk and % Processor Performance values'
+    } else {
+        Assert-CM ($fastMetrics.ErrorsJson -eq '[]' -and $null -ne $fastMetrics.CpuUsagePct) 'Performance counters unavailable on this system; the WMI fallback collected the sample'
+    }
+    Close-CMTelemetrySensor
     $legacy=Join-Path $temp 'Logs';[void][IO.Directory]::CreateDirectory($legacy)
     [IO.File]::WriteAllText((Join-Path $legacy 'heartbeat.csv'),'legacy evidence')
     $cfg.MaxLogSizeMB=0.000001
@@ -391,7 +412,7 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         Assert-CM ($null -ne $report.PSObject.Properties['StorageHealthChanges']) 'Incident report.json carries StorageHealthChanges'
     } finally {
         & $diagnostics { Set-Item Function:script:Get-CMSmartctlPath $script:SavedSmartctlPath; Set-Item Function:script:Invoke-CMSmartctl $script:SavedInvokeSmartctl; Remove-Variable SavedSmartctlPath,SavedInvokeSmartctl,SmartFixture -Scope Script }
-        Remove-Item Function:global:Get-PhysicalDisk,Function:global:Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
+        Remove-Item Function:\Get-PhysicalDisk,Function:\Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
         Remove-Variable CMTestCounters,CMTestStorageDisks -Scope Global -ErrorAction SilentlyContinue
     }
 
@@ -512,7 +533,7 @@ ST1000DM010-2EP102_Temperature_Temperature:32
         Assert-CM ($task.Principal.UserId -eq 'SYSTEM' -and $task.Principal.LogonType -eq 'ServiceAccount' -and $task.Principal.RunLevel -eq 'Highest') 'AutoStart task runs as SYSTEM with highest privileges'
         Assert-CM ($task.Settings.Batteries -and $task.Settings.ExecutionTimeLimit -eq [TimeSpan]::Zero -and $task.Settings.RestartCount -eq 3 -and $task.Settings.RestartInterval -eq [TimeSpan]::FromMinutes(1) -and $task.Settings.MultipleInstances -eq 'IgnoreNew') 'AutoStart task has no time limit, restarts on failure and ignores duplicate starts'
     } finally {
-        foreach ($name in $taskMocks) { Remove-Item "Function:global:$name" -ErrorAction SilentlyContinue }
+        foreach ($name in $taskMocks) { Remove-Item "Function:\$name" -ErrorAction SilentlyContinue }
         Remove-Variable CMTestRegisteredTask -Scope Global -ErrorAction SilentlyContinue
     }
 

@@ -1,19 +1,101 @@
 #Requires -Version 5.1
 Import-Module (Join-Path $PSScriptRoot 'Common.psm1')
-$script:Columns = @('SchemaVersion','Utc','Local','UtcOffsetMinutes','BootKey','CpuUsagePct','RamAvailableMB','RamUsedPct','CommittedMB','CommitLimitMB','PoolNonpagedMB','PoolPagedMB','PagesPerSec','DiskQueueLength','DiskReadBytesPerSec','DiskWriteBytesPerSec','TopMemoryProcesses','DiskCountersJson','TemperatureStatus','HardwareSensorsJson','ErrorsJson','IoLatencyMs','DurationMs')
+# ProcessorPerformancePct is appended last so existing column positions stay valid for readers that index them.
+$script:Columns = @('SchemaVersion','Utc','Local','UtcOffsetMinutes','BootKey','CpuUsagePct','RamAvailableMB','RamUsedPct','CommittedMB','CommitLimitMB','PoolNonpagedMB','PoolPagedMB','PagesPerSec','DiskQueueLength','DiskReadBytesPerSec','DiskWriteBytesPerSec','TopMemoryProcesses','DiskCountersJson','TemperatureStatus','HardwareSensorsJson','ErrorsJson','IoLatencyMs','DurationMs','ProcessorPerformancePct')
 
 function Get-CMTelemetryColumns { return $script:Columns }
+
+# Persistent PerformanceCounter objects: one sample costs ~80 ms instead of ~900 ms for the WMI formatted classes,
+# and rates are averaged over the whole sampling interval. $null = not initialised; $false = unavailable, use WMI.
+$script:FastCounters = $null
+$script:TotalMemoryMB = $null
+$script:DiskCounters = $null
+$script:DiskInstanceKey = $null
+
+function Initialize-CMPerformanceCounters {
+    if ($null -ne $script:FastCounters) { return [bool]$script:FastCounters }
+    try {
+        $counters = [ordered]@{ Cpu = New-Object Diagnostics.PerformanceCounter('Processor', '% Processor Time', '_Total') }
+        foreach ($pair in @(@('Available','Available Bytes'),@('Committed','Committed Bytes'),@('CommitLimit','Commit Limit'),@('PoolNonpaged','Pool Nonpaged Bytes'),@('PoolPaged','Pool Paged Bytes'),@('Pages','Pages/sec'))) {
+            $counters[$pair[0]] = New-Object Diagnostics.PerformanceCounter('Memory', $pair[1])
+        }
+        # Below 100 under load means the CPU runs under its base clock: thermal or power-limit throttling.
+        try { $counters['Performance'] = New-Object Diagnostics.PerformanceCounter('Processor Information', '% Processor Performance', '_Total') } catch { }
+        foreach ($counter in $counters.Values) { [void]$counter.NextValue() }
+        $script:TotalMemoryMB = [double](Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 10 -ErrorAction Stop).TotalVisibleMemorySize / 1024
+        $script:FastCounters = $counters
+        Update-CMDiskCounters
+        return $true
+    } catch {
+        # English counter names can be missing on some localized systems; the WMI classes are language-independent.
+        $script:FastCounters = $false
+        return $false
+    }
+}
+
+function Update-CMDiskCounters {
+    # Recreates the per-disk counters only when the set of disks changes (e.g. a USB disk is attached).
+    $names = @((New-Object Diagnostics.PerformanceCounterCategory('PhysicalDisk')).GetInstanceNames() | Sort-Object)
+    $key = $names -join '|'
+    if ($key -eq $script:DiskInstanceKey) { return }
+    if ($script:DiskCounters) { foreach ($set in $script:DiskCounters.Values) { foreach ($pc in $set.Values) { $pc.Dispose() } } }
+    $script:DiskCounters = [ordered]@{}
+    foreach ($name in $names) {
+        $set = [ordered]@{}
+        foreach ($pair in @(@('CurrentDiskQueueLength','Current Disk Queue Length'),@('DiskReadBytesPersec','Disk Read Bytes/sec'),@('DiskWriteBytesPersec','Disk Write Bytes/sec'),@('PercentDiskTime','% Disk Time'))) {
+            $pc = New-Object Diagnostics.PerformanceCounter('PhysicalDisk', $pair[1], $name)
+            [void]$pc.NextValue()
+            $set[$pair[0]] = $pc
+        }
+        $script:DiskCounters[$name] = $set
+    }
+    $script:DiskInstanceKey = $key
+}
+
+function Read-CMPerformanceCounters {
+    param([System.Collections.IDictionary]$Row)
+    $c = $script:FastCounters
+    $Row.CpuUsagePct = [math]::Round([double]$c.Cpu.NextValue(), 1)
+    if ($c.Contains('Performance')) { $Row.ProcessorPerformancePct = [math]::Round([double]$c.Performance.NextValue(), 1) }
+    $Row.RamAvailableMB = [math]::Round([double]$c.Available.NextValue() / 1MB, 2)
+    if ($script:TotalMemoryMB -gt 0) { $Row.RamUsedPct = [math]::Round(100 * (1 - $Row.RamAvailableMB / $script:TotalMemoryMB), 2) }
+    foreach ($pair in @(@('CommittedMB','Committed'),@('CommitLimitMB','CommitLimit'),@('PoolNonpagedMB','PoolNonpaged'),@('PoolPagedMB','PoolPaged'))) {
+        $Row[$pair[0]] = [math]::Round([double]$c[$pair[1]].NextValue() / 1MB, 2)
+    }
+    $Row.PagesPerSec = [math]::Round([double]$c.Pages.NextValue(), 2)
+    Update-CMDiskCounters
+    $disks = @(foreach ($name in $script:DiskCounters.Keys) {
+        $set = $script:DiskCounters[$name]
+        [pscustomobject][ordered]@{
+            Name = $name
+            CurrentDiskQueueLength = [math]::Round([double]$set.CurrentDiskQueueLength.NextValue(), 2)
+            DiskReadBytesPersec = [math]::Round([double]$set.DiskReadBytesPersec.NextValue())
+            DiskWriteBytesPersec = [math]::Round([double]$set.DiskWriteBytesPersec.NextValue())
+            PercentDiskTime = [math]::Round([double]$set.PercentDiskTime.NextValue(), 1)
+        }
+    })
+    $total = $disks | Where-Object Name -eq '_Total' | Select-Object -First 1
+    if ($total) { $Row.DiskQueueLength = $total.CurrentDiskQueueLength; $Row.DiskReadBytesPerSec = $total.DiskReadBytesPersec; $Row.DiskWriteBytesPerSec = $total.DiskWriteBytesPersec }
+    $Row.DiskCountersJson = ConvertTo-Json -InputObject $disks -Compress
+}
+
+function Get-CMCounterMode {
+    if ($script:FastCounters) { return 'PerformanceCounter' }
+    return 'WMI'
+}
 
 function Initialize-CMTelemetry {
     # The first performance-counter query in a process is the slowest (CIM session setup; on a cold boot also the
     # WMI performance provider load) and can exceed the 4 s per-sample timeout. One discarded query warms it up.
+    # The persistent counters are created here too, so the first sample already has a full-interval average.
     param([int]$TimeoutSec = 30)
     $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
         $null = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -OperationTimeoutSec $TimeoutSec -ErrorAction Stop
-        return [pscustomobject]@{ Success=$true; DurationMs=$timer.ElapsedMilliseconds; Error='' }
+        [void](Initialize-CMPerformanceCounters)
+        return [pscustomobject]@{ Success=$true; DurationMs=$timer.ElapsedMilliseconds; Error=''; CounterMode=(Get-CMCounterMode) }
     } catch {
-        return [pscustomobject]@{ Success=$false; DurationMs=$timer.ElapsedMilliseconds; Error=[string]$_ }
+        return [pscustomobject]@{ Success=$false; DurationMs=$timer.ElapsedMilliseconds; Error=[string]$_; CounterMode=(Get-CMCounterMode) }
     }
 }
 
@@ -118,6 +200,13 @@ function Get-CMTelemetry {
     $row = [ordered]@{ SchemaVersion=2; Utc=$now.UtcDateTime.ToString('o'); Local=$now.ToString('o'); UtcOffsetMinutes=$now.Offset.TotalMinutes; BootKey=$Boot.BootKey }
     foreach ($name in $script:Columns) { if (-not $row.Contains($name)) { $row[$name]=$null } }
     $errors = New-Object Collections.Generic.List[string]
+    $fast = $false
+    if ([bool](Get-CMValue $Config 'UsePerformanceCounters' $true)) { $fast = Initialize-CMPerformanceCounters }
+    if ($fast) {
+        try { Read-CMPerformanceCounters $row }
+        catch { $errors.Add("Performance counters: $_ (WMI used for this sample)"); $script:FastCounters = $null; $fast = $false }
+    }
+    if (-not $fast) {
     try {
         $cpu = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -OperationTimeoutSec 4 -ErrorAction Stop
         if ($null -ne $cpu) { $row.CpuUsagePct=[double]$cpu.PercentProcessorTime }
@@ -148,6 +237,12 @@ function Get-CMTelemetry {
         }
         $row.DiskCountersJson=ConvertTo-Json -InputObject @($disks | Select-Object Name,CurrentDiskQueueLength,DiskReadBytesPersec,DiskWriteBytesPersec,PercentDiskTime) -Compress
     } catch { $errors.Add("Disk counters: $_") }
+    # Optional: older systems have no Processor Information class, which is not a collector failure.
+    try {
+        $info = Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'" -OperationTimeoutSec 4 -ErrorAction Stop
+        if ($null -ne $info) { $row.ProcessorPerformancePct=[double]$info.PercentProcessorPerformance }
+    } catch { }
+    }
     try {
         $allProc = @(Get-Process -ErrorAction Stop | Sort-Object WorkingSet64 -Descending)
         $top = @($allProc | Select-Object -First 10 | ForEach-Object {
@@ -342,6 +437,9 @@ function Write-CMTelemetry {
 }
 
 function Close-CMTelemetrySensor {
+    if ($script:FastCounters) { foreach ($pc in $script:FastCounters.Values) { try { $pc.Dispose() } catch { } } }
+    if ($script:DiskCounters) { foreach ($set in $script:DiskCounters.Values) { foreach ($pc in $set.Values) { try { $pc.Dispose() } catch { } } } }
+    $script:FastCounters = $null; $script:DiskCounters = $null; $script:DiskInstanceKey = $null
     try {
         if (Get-Command 'Close-CrashMonitorVoltageSensor' -ErrorAction SilentlyContinue) {
             Close-CrashMonitorVoltageSensor
@@ -349,4 +447,4 @@ function Close-CMTelemetrySensor {
     } catch { }
 }
 
-Export-ModuleMember -Function Get-CMTelemetryColumns, Initialize-CMTelemetry, Get-CMStorageTemperatures, Get-CMSensorAlerts, New-CMTelemetryPacket, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor
+Export-ModuleMember -Function Get-CMTelemetryColumns, Initialize-CMTelemetry, Get-CMCounterMode, Get-CMStorageTemperatures, Get-CMSensorAlerts, New-CMTelemetryPacket, Get-CMTelemetry, Write-CMTelemetry, Send-CMUdpHeartbeat, Close-CMTelemetrySensor

@@ -32,7 +32,7 @@ else {
     Import-Module (Join-Path $codeRoot 'Modules/TelemetryV2.psm1') -Force
     Write-ProgressState 'WarmingUp'
     $warmUp=Initialize-CMTelemetry
-    if ($warmUp.Success) { Write-CMLog $RootPath $Role "Performance counter warm-up took $($warmUp.DurationMs) ms." }
+    if ($warmUp.Success) { Write-CMLog $RootPath $Role "Performance counter warm-up took $($warmUp.DurationMs) ms; counter source: $($warmUp.CounterMode)." }
     else { Write-CMLog $RootPath $Role "Performance counter warm-up failed after $($warmUp.DurationMs) ms: $($warmUp.Error)" 'WARN' }
 }
 try {

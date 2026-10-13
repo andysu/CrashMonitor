@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T09:55:23Z",
+    "GeneratedUtc":  "2026-10-13T10:04:08Z",
     "GitCommit":  null,
     "FileCount":  62,
     "Files":  [
@@ -22,8 +22,8 @@
                   },
                   {
                       "Path":  "Config/defaults-v2.json",
-                      "SizeBytes":  1259,
-                      "Sha256":  "370aaf94dfdf790cfc3274a65ebbb5a2139efff14bcd6190f0f431b59669c38c"
+                      "SizeBytes":  1294,
+                      "Sha256":  "9aa5f5dd3d6587fd9ce9d10ea427208bf5944ee06b51b7856c98c877ed295f24"
                   },
                   {
                       "Path":  "CrashMonitor.ps1",
@@ -52,8 +52,8 @@
                   },
                   {
                       "Path":  "Modules/TelemetryV2.psm1",
-                      "SizeBytes":  19487,
-                      "Sha256":  "1c256b9ac017b8b9ef8c8d3c5b01eb9d8d3c2050ecd70f6318d38ee1fa80b620"
+                      "SizeBytes":  25715,
+                      "Sha256":  "ba7d052cb71f7cabe1fff26d7005a923ded48986cd3fa46cf6276ac10c40bdfd"
                   },
                   {
                       "Path":  "Modules/VoltageMonitor.psm1",
@@ -137,8 +137,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  57364,
-                      "Sha256":  "a0923efd5da3d6bc97bcca119f15c37fb193ccac0e2e760af24b6e71e1374f1b"
+                      "SizeBytes":  59702,
+                      "Sha256":  "b400f9eb39c7b39d92b9e9932d6b95bded7b0862e0baeb62d03f5ebe590cb559"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
@@ -312,8 +312,8 @@
                   },
                   {
                       "Path":  "Worker.ps1",
-                      "SizeBytes":  5119,
-                      "Sha256":  "3c74853be5331b1ba8c4628a384f849185e80583480c79ecc41b43be45fe8c76"
+                      "SizeBytes":  5159,
+                      "Sha256":  "d4e3a854d2d28cf1b13a789488dc61dd0cab9fee330f3220af53c36b7310b0fe"
                   }
               ]
 }

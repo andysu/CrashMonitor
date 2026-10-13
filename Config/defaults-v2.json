@@ -1,6 +1,7 @@
 {
   "SchemaVersion": 2,
   "SampleIntervalSeconds": 3,
+  "UsePerformanceCounters": true,
   "HeartbeatIntervalSeconds": 2,
   "EventPollSeconds": 3,
   "StorageHealthIntervalMinutes": 15,
