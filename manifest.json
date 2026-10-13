@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T09:08:50Z",
+    "GeneratedUtc":  "2026-10-13T09:35:01Z",
     "GitCommit":  null,
     "FileCount":  58,
     "Files":  [
@@ -22,8 +22,8 @@
                   },
                   {
                       "Path":  "Config/defaults-v2.json",
-                      "SizeBytes":  1220,
-                      "Sha256":  "264afa7db6bf7026de2f26ae2a41b3ee0e3d1f4d839576b993dfbc98276a4f64"
+                      "SizeBytes":  1259,
+                      "Sha256":  "370aaf94dfdf790cfc3274a65ebbb5a2139efff14bcd6190f0f431b59669c38c"
                   },
                   {
                       "Path":  "CrashMonitor.ps1",
@@ -42,8 +42,8 @@
                   },
                   {
                       "Path":  "Modules/Diagnostics.psm1",
-                      "SizeBytes":  23916,
-                      "Sha256":  "79ba57f3764e700dd9f2570d42fbafb18ae31ccdc3054181f6fb57c44eb6b68f"
+                      "SizeBytes":  34904,
+                      "Sha256":  "dc738704cf7330432773818320edf0daf91d03b63f559926c2171ba060e55efd"
                   },
                   {
                       "Path":  "Modules/EventCapture.psm1",
@@ -132,8 +132,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  43498,
-                      "Sha256":  "3617797db02ab2df6741d013ccf1b4f498a66b581f07c7729db40c9ac7f630dd"
+                      "SizeBytes":  49664,
+                      "Sha256":  "d312a1d365d24afe001aaaac3f00275fe0690ec80aeda327b6e9afd28a99bf4e"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
@@ -292,8 +292,8 @@
                   },
                   {
                       "Path":  "Worker.ps1",
-                      "SizeBytes":  3974,
-                      "Sha256":  "f4c03ee0b189e610ec99b95de71abcdb6c6ed7bd07243883f3ca3f8a8134818e"
+                      "SizeBytes":  4924,
+                      "Sha256":  "9bc1dd1c4846592538f9a456f61e1989e5b44ed8b23acd338d47037d73ac59ef"
                   }
               ]
 }

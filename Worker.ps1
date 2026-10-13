@@ -23,6 +23,9 @@ function Write-ProgressState {
 Write-ProgressState 'Starting'
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $lastCleanup=-60000L
+$lastStorage=0L
+$storageIntervalMinutes=[double](Get-CMValue $config 'StorageHealthIntervalMinutes' 15)
+if ($storageIntervalMinutes -le 0) { $storageIntervalMinutes=15 }
 $incidentPending=$true
 if ($Role -eq 'events') { Import-Module (Join-Path $codeRoot 'Modules/EventCapture.psm1') -Force; Import-Module (Join-Path $codeRoot 'Modules/Diagnostics.psm1') -Force }
 else {
@@ -43,6 +46,15 @@ try {
             if ($Role -eq 'telemetry') { Write-CMTelemetry $RootPath (Get-CMTelemetry $RootPath $codeRoot $config $boot) $config }
             else {
                 [void](Receive-CMEvents $RootPath $config $boot)
+                # Storage health runs here, not in the telemetry loop: a snapshot can take seconds and must not open gaps in telemetry.
+                $storageDue=$incidentPending -or (($clock.ElapsedMilliseconds-$lastStorage) -ge ($storageIntervalMinutes*60000))
+                $storageChanges=@()
+                if ($storageDue) {
+                    Write-ProgressState 'StorageHealth'
+                    try { $storageChanges=@(Invoke-CMStorageHealthSnapshot -Root $RootPath -ToolsDir (Join-Path $RootPath 'Tools') -BootKey $boot.BootKey) }
+                    catch { Write-CMLog $RootPath $Role "Storage health snapshot failed: $_" 'ERROR' }
+                    $lastStorage=$clock.ElapsedMilliseconds
+                }
                 if ($incidentPending) {
                     Write-ProgressState 'BuildingIncident'
                     try {
@@ -50,7 +62,7 @@ try {
                         Write-CMJson (Join-Path $RootPath 'Evidence/State/smart-counters.json') $currentSmart
                     } catch { }
                     $events=@(Get-CMBootEvents $RootPath $boot)
-                    New-CMIncident -Root $RootPath -Config $config -Boot $boot -Events $events -PreviousSession $previous
+                    New-CMIncident -Root $RootPath -Config $config -Boot $boot -Events $events -PreviousSession $previous -StorageHealthChanges $storageChanges
                     $incidentPending=$false
                 }
                 if (($clock.ElapsedMilliseconds-$lastCleanup) -ge 60000) { Invoke-CMRotation $RootPath $config; $lastCleanup=$clock.ElapsedMilliseconds }

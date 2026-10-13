@@ -109,8 +109,164 @@ function Get-CMHardwareChannels {
     } | Where-Object { $_.Name })
 }
 
+# Storage health history: one row per disk every StorageHealthIntervalMinutes (events worker).
+# Windows reliability counters (CIM) are sparse on many disks; smartctl in Tools/smartmontools adds the SMART
+# attributes that point at hardware: reallocated/pending sectors, CRC (cable) errors, command timeouts, NVMe media errors.
+$script:StorageHealthColumns = @('SchemaVersion','Utc','BootKey','Source','DeviceId','Model','Serial','BusType','MediaType','Health','SmartPassed','TemperatureC','TemperatureMaxC','PowerOnHours','PowerCycles','UnsafeShutdowns','StartStopCycles','LoadUnloadCycles','WearPct','AvailableSparePct','ReadErrorsTotal','ReadErrorsUncorrected','WriteErrorsTotal','WriteErrorsUncorrected','ReadLatencyMaxMs','WriteLatencyMaxMs','FlushLatencyMaxMs','ReallocatedSectors','PendingSectors','OfflineUncorrectable','ReportedUncorrect','CommandTimeouts','CrcErrors','MediaErrors','ErrorLogEntries','CriticalWarning')
+# Counters whose growth means new hardware trouble (or, for UnsafeShutdowns, a power loss).
+$script:StorageGrowthCounters = @('UnsafeShutdowns','ReadErrorsTotal','ReadErrorsUncorrected','WriteErrorsTotal','WriteErrorsUncorrected','ReallocatedSectors','PendingSectors','OfflineUncorrectable','ReportedUncorrect','CommandTimeouts','CrcErrors','MediaErrors','ErrorLogEntries')
+
+function New-CMStorageHealthRow {
+    $row=[ordered]@{}
+    foreach ($name in $script:StorageHealthColumns) { $row[$name]=$null }
+    $row.SchemaVersion=1
+    return $row
+}
+
+function ConvertFrom-CMReliabilityCounter {
+    param($Disk, $Counter)
+    $row=New-CMStorageHealthRow
+    $row.Source='CIM'; $row.DeviceId=[string]$Disk.DeviceId; $row.Model=[string]$Disk.FriendlyName; $row.Serial=([string]$Disk.SerialNumber).Trim()
+    $row.BusType=[string]$Disk.BusType; $row.MediaType=[string]$Disk.MediaType; $row.Health=[string]$Disk.HealthStatus
+    if ($Counter) {
+        foreach ($map in @(@('TemperatureC','Temperature'),@('TemperatureMaxC','TemperatureMax'),@('PowerOnHours','PowerOnHours'),@('StartStopCycles','StartStopCycleCount'),@('LoadUnloadCycles','LoadUnloadCycleCount'),@('WearPct','Wear'),@('ReadErrorsTotal','ReadErrorsTotal'),@('ReadErrorsUncorrected','ReadErrorsUncorrected'),@('WriteErrorsTotal','WriteErrorsTotal'),@('WriteErrorsUncorrected','WriteErrorsUncorrected'),@('ReadLatencyMaxMs','ReadLatencyMax'),@('WriteLatencyMaxMs','WriteLatencyMax'),@('FlushLatencyMaxMs','FlushLatencyMax'))) {
+            $value=Get-CMValue $Counter $map[1]
+            if ($null -ne $value) { $row[$map[0]]=[double]$value }
+        }
+    }
+    return $row
+}
+
+function ConvertFrom-CMSmartctlJson {
+    param($Info, [string]$Device)
+    $row=New-CMStorageHealthRow
+    $row.Source='smartctl'; $row.DeviceId=$Device; $row.Model=[string]$Info.model_name; $row.Serial=([string]$Info.serial_number).Trim()
+    if ($Info.smart_status -and $null -ne $Info.smart_status.passed) { $row.SmartPassed=[bool]$Info.smart_status.passed }
+    if ($Info.temperature -and $null -ne $Info.temperature.current) { $row.TemperatureC=[double]$Info.temperature.current }
+    if ($Info.power_on_time -and $null -ne $Info.power_on_time.hours) { $row.PowerOnHours=[double]$Info.power_on_time.hours }
+    if ($null -ne $Info.power_cycle_count) { $row.PowerCycles=[double]$Info.power_cycle_count }
+    $nvme=$Info.nvme_smart_health_information_log
+    if ($nvme) {
+        $row.BusType='NVMe'
+        foreach ($map in @(@('CriticalWarning','critical_warning'),@('AvailableSparePct','available_spare'),@('WearPct','percentage_used'),@('MediaErrors','media_errors'),@('ErrorLogEntries','num_err_log_entries'),@('UnsafeShutdowns','unsafe_shutdowns'),@('PowerCycles','power_cycles'),@('PowerOnHours','power_on_hours'))) {
+            $value=Get-CMValue $nvme $map[1]
+            if ($null -ne $value) { $row[$map[0]]=[double]$value }
+        }
+    }
+    if ($Info.ata_smart_attributes -and $Info.ata_smart_attributes.table) {
+        $ataMap=@{ 4='StartStopCycles'; 5='ReallocatedSectors'; 12='PowerCycles'; 187='ReportedUncorrect'; 188='CommandTimeouts'; 192='UnsafeShutdowns'; 193='LoadUnloadCycles'; 197='PendingSectors'; 198='OfflineUncorrectable'; 199='CrcErrors' }
+        foreach ($attr in $Info.ata_smart_attributes.table) {
+            $column=$ataMap[[int]$attr.id]
+            if ($column -and $attr.raw -and $null -ne $attr.raw.value) { $row[$column]=[double]$attr.raw.value }
+        }
+    }
+    return $row
+}
+
+function Get-CMSmartctlPath {
+    param([string]$ToolsDir)
+    $path=Join-Path $ToolsDir 'smartmontools\smartctl.exe'
+    if (Test-Path -LiteralPath $path) { return $path }
+    $cmd=Get-Command 'smartctl.exe' -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    return $null
+}
+
+function Invoke-CMSmartctl {
+    param([string]$Path, [string]$Arguments, [int]$TimeoutMs = 10000)
+    $psi=New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName=$Path; $psi.Arguments=$Arguments; $psi.UseShellExecute=$false; $psi.CreateNoWindow=$true
+    $psi.RedirectStandardOutput=$true; $psi.RedirectStandardError=$true
+    $proc=[Diagnostics.Process]::Start($psi)
+    try {
+        $read=$proc.StandardOutput.ReadToEndAsync()
+        if (-not $proc.WaitForExit($TimeoutMs)) { try { $proc.Kill() } catch { }; return $null }
+        # smartctl sets exit-code bits for disk warnings; the JSON is still valid, so it is parsed regardless.
+        return $read.Result
+    } finally { $proc.Dispose() }
+}
+
+function ConvertTo-CMSerialKey { param([string]$Serial) return (($Serial -replace '[^A-Za-z0-9]','').TrimStart('0')).ToUpperInvariant() }
+
+function Get-CMStorageHealth {
+    param([string]$ToolsDir)
+    $rows=New-Object Collections.Generic.List[object]
+    $disks=@()
+    try { $disks=@(Get-PhysicalDisk -ErrorAction Stop) } catch { }
+    foreach ($disk in $disks) {
+        $counter=$null
+        try { $counter=$disk | Get-StorageReliabilityCounter -ErrorAction Stop } catch { }
+        $rows.Add((ConvertFrom-CMReliabilityCounter $disk $counter))
+    }
+    $smartctl=Get-CMSmartctlPath $ToolsDir
+    if ($smartctl) {
+        $scan=$null
+        try { $scan=(Invoke-CMSmartctl $smartctl '--scan-open -j') | ConvertFrom-Json } catch { }
+        foreach ($dev in @($scan.devices)) {
+            if (-not $dev.name) { continue }
+            $info=$null
+            try { $info=(Invoke-CMSmartctl $smartctl "-a $($dev.name) -j") | ConvertFrom-Json } catch { }
+            if (-not $info -or -not $info.model_name) { continue }
+            $smart=ConvertFrom-CMSmartctlJson $info ([string]$dev.name)
+            # Match the CIM row by serial; NVMe serials differ between the two sources, so fall back to a unique model name.
+            $match=@($rows | Where-Object { $_.Serial -and (ConvertTo-CMSerialKey $_.Serial) -eq (ConvertTo-CMSerialKey $smart.Serial) })
+            if (-not $match.Count) { $match=@($rows | Where-Object { $_.Model -and $_.Model.Trim() -eq $smart.Model.Trim() }) }
+            if ($match.Count -eq 1) {
+                foreach ($name in $script:StorageHealthColumns) { if ($null -ne $smart[$name] -and $name -notin @('Source','DeviceId','Model','Serial','SchemaVersion')) { $match[0][$name]=$smart[$name] } }
+                $match[0].Source='CIM+smartctl'
+            } else { $rows.Add($smart) }
+        }
+    }
+    return $rows.ToArray()
+}
+
+function Compare-CMStorageHealth {
+    param([object[]]$Previous, [object[]]$Current)
+    $changes=New-Object Collections.Generic.List[object]
+    $keyOf={ param($row) if ($row.Serial) { 'S:' + (ConvertTo-CMSerialKey $row.Serial) } else { "D:$($row.DeviceId)|$($row.Model)" } }
+    $before=@{}
+    foreach ($row in @($Previous)) { if ($row) { $before[(& $keyOf $row)]=$row } }
+    foreach ($row in @($Current)) {
+        $old=$before[(& $keyOf $row)]
+        if (-not $old) { continue }
+        $disk="$($row.Model) ($($row.Serial))".Trim()
+        foreach ($name in $script:StorageGrowthCounters) {
+            $was=Get-CMValue $old $name; $now=Get-CMValue $row $name
+            if ($null -ne $was -and $null -ne $now -and "$was" -ne '' -and "$now" -ne '' -and [double]$now -gt [double]$was) { $changes.Add([pscustomobject]@{ Disk=$disk; Counter=$name; Before=[double]$was; After=[double]$now }) }
+        }
+        $wasHealth=[string](Get-CMValue $old 'Health'); $nowHealth=[string](Get-CMValue $row 'Health')
+        if ($wasHealth -and $nowHealth -and $wasHealth -ne $nowHealth) { $changes.Add([pscustomobject]@{ Disk=$disk; Counter='Health'; Before=$wasHealth; After=$nowHealth }) }
+        $wasPassed=Get-CMValue $old 'SmartPassed'; $nowPassed=Get-CMValue $row 'SmartPassed'
+        if ("$wasPassed" -eq 'True' -and "$nowPassed" -eq 'False') { $changes.Add([pscustomobject]@{ Disk=$disk; Counter='SmartPassed'; Before=$true; After=$false }) }
+        $warning=Get-CMValue $row 'CriticalWarning'
+        if ("$warning" -ne '' -and [double]$warning -gt 0 -and "$warning" -ne "$(Get-CMValue $old 'CriticalWarning')") { $changes.Add([pscustomobject]@{ Disk=$disk; Counter='CriticalWarning'; Before=(Get-CMValue $old 'CriticalWarning'); After=[double]$warning }) }
+    }
+    return $changes.ToArray()
+}
+
+function Invoke-CMStorageHealthSnapshot {
+    # Appends one storage-health.csv row per disk, logs counters that grew since the previous snapshot
+    # (also across a reboot) and returns those changes for the incident report.
+    param([string]$Root, [string]$ToolsDir, [string]$BootKey)
+    $rows=@(Get-CMStorageHealth $ToolsDir)
+    if (-not $rows.Count) { return @() }
+    $utc=[datetime]::UtcNow.ToString('o')
+    foreach ($row in $rows) {
+        $row.Utc=$utc; $row.BootKey=$BootKey
+        Write-CMCsv -Path (Join-Path $Root 'Evidence/Logs/storage-health.csv') -Columns $script:StorageHealthColumns -Row $row
+    }
+    $lastPath=Join-Path $Root 'Evidence/State/storage-health-last.json'
+    $previous=$null
+    try { $previous=Read-CMJson $lastPath } catch { Write-CMLog $Root 'events' "Unreadable storage-health-last.json; comparison skipped: $_" 'WARNING' }
+    $changes=@()
+    if ($previous) { $changes=@(Compare-CMStorageHealth @($previous.Disks) $rows) }
+    foreach ($change in $changes) { Write-CMLog $Root 'events' "Storage health change: $($change.Disk) $($change.Counter) $($change.Before) -> $($change.After)" 'WARNING' }
+    Write-CMJson $lastPath @{ Utc=$utc; BootKey=$BootKey; Disks=$rows }
+    return $changes
+}
+
 function New-CMIncident {
-    param([string]$Root, [hashtable]$Config, $Boot, [object[]]$Events, $PreviousSession)
+    param([string]$Root, [hashtable]$Config, $Boot, [object[]]$Events, $PreviousSession, [object[]]$StorageHealthChanges = @())
     $dir=Join-Path $Root "Evidence/Incidents/$($Boot.BootKey)"
     if (Test-Path -LiteralPath (Join-Path $dir 'complete.json')) { return }
     [void][IO.Directory]::CreateDirectory($dir)
@@ -131,7 +287,7 @@ function New-CMIncident {
     }
 
     # 2. Copy pre-crash logs with boot demarcation
-    foreach ($name in @('telemetry-v2.csv','heartbeat-v2.csv','temperatures.csv','events.jsonl','supervisor.log','events.log','telemetry.log')) {
+    foreach ($name in @('telemetry-v2.csv','heartbeat-v2.csv','temperatures.csv','storage-health.csv','events.jsonl','supervisor.log','events.log','telemetry.log')) {
         $path=Join-Path $Root "Evidence/Logs/$name"
         if (Test-Path -LiteralPath $path) {
             if ($name.EndsWith('.csv')) {
@@ -300,6 +456,7 @@ function New-CMIncident {
         PreviousSession=$PreviousSession; Classification=$classification
         PreCrashMetrics=[pscustomobject]$preCrashMetrics
         SmartAnalysis=$smartAnalysis
+        StorageHealthChanges=@($StorageHealthChanges)
         BootEvents=@($Events); Limitations=@('No dump analysis performed. Heartbeat timestamps are last confirmed monitor activity, not an exact failure time.','Disk errors and WHEA are evidence, not an automatic root-cause verdict.','Software polling cannot rule out short power loss, CPU overheating or hardware watchdog resets.')
     }
     Write-CMJson (Join-Path $dir 'report.json') $report
@@ -321,6 +478,10 @@ function New-CMIncident {
             "Voltage rails (15m): +12V [$($preCrashExtremes.Min12V) .. $($preCrashExtremes.Max12V)], +5V [$($preCrashExtremes.Min5V) .. $($preCrashExtremes.Max5V)], +3.3V [$($preCrashExtremes.Min3V3) .. $($preCrashExtremes.Max3V3)]",
             "Max temperatures (15m): CPU=$(if ($null -ne $preCrashExtremes.MaxCpuTemp) { "$($preCrashExtremes.MaxCpuTemp)C" } else { 'N/A' }), Disk=$(if ($null -ne $preCrashExtremes.MaxDiskTemp) { "$($preCrashExtremes.MaxDiskTemp)C" } else { 'N/A' }), ThermalZone=$(if ($null -ne $preCrashExtremes.MaxThermalZoneTemp) { "$($preCrashExtremes.MaxThermalZoneTemp)C" } else { 'N/A' })"
         )
+    }
+    if (@($StorageHealthChanges).Count) {
+        $lines+=@('','--- Storage counters that grew since the last snapshot before this boot ---')
+        $lines+=@($StorageHealthChanges | ForEach-Object { "$($_.Disk): $($_.Counter) $($_.Before) -> $($_.After)" })
     }
     $lines+=@('','Events (UTC / provider / ID / message):')
     $lines+=@($Events | Sort-Object Utc | ForEach-Object { "$($_.Utc) | $($_.Provider) | $($_.EventId) | $($_.Message)" })
@@ -364,4 +525,4 @@ function Export-CMDiagnostics {
     Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     return $zip
 }
-Export-ModuleMember -Function Invoke-CMNative, Get-CMInventory, Export-CMEvtx, New-CMIncident, Export-CMDiagnostics
+Export-ModuleMember -Function Invoke-CMNative, Get-CMInventory, Export-CMEvtx, ConvertFrom-CMReliabilityCounter, ConvertFrom-CMSmartctlJson, Get-CMStorageHealth, Compare-CMStorageHealth, Invoke-CMStorageHealthSnapshot, New-CMIncident, Export-CMDiagnostics

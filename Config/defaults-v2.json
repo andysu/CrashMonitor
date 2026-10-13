@@ -3,6 +3,7 @@
   "SampleIntervalSeconds": 3,
   "HeartbeatIntervalSeconds": 2,
   "EventPollSeconds": 3,
+  "StorageHealthIntervalMinutes": 15,
   "EventBackfillHours": 48,
   "EventBatchSize": 500,
   "WorkerStallSeconds": 300,

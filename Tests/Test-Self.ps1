@@ -347,6 +347,41 @@ ST1000DM010-2EP102_Temperature_Temperature:32
             Remove-Variable SavedInventoryFixture,SavedExportFixture -Scope Script
         }
     }
+    # Storage health: smartctl JSON (ATA and NVMe) and Windows reliability counters, merged per disk, compared across snapshots.
+    $ataJson='{"model_name":"ST1000DM010-2EP102","serial_number":"ZN10TCNW","smart_status":{"passed":true},"temperature":{"current":33},"power_on_time":{"hours":41234},"power_cycle_count":1520,"ata_smart_attributes":{"table":[{"id":5,"raw":{"value":0}},{"id":12,"raw":{"value":1520}},{"id":187,"raw":{"value":0}},{"id":188,"raw":{"value":2}},{"id":192,"raw":{"value":210}},{"id":197,"raw":{"value":8}},{"id":198,"raw":{"value":8}},{"id":199,"raw":{"value":3}}]}}'
+    $nvmeJson='{"model_name":"KINGSTON SNV2S500G","serial_number":"50026B7283291D3E5","smart_status":{"passed":true},"temperature":{"current":38},"nvme_smart_health_information_log":{"critical_warning":0,"available_spare":100,"percentage_used":7,"power_cycles":900,"power_on_hours":5000,"unsafe_shutdowns":45,"media_errors":0,"num_err_log_entries":12}}'
+    $ata=ConvertFrom-CMSmartctlJson ($ataJson | ConvertFrom-Json) '/dev/sda'
+    Assert-CM ($ata.ReallocatedSectors -eq 0 -and $ata.PendingSectors -eq 8 -and $ata.OfflineUncorrectable -eq 8 -and $ata.CrcErrors -eq 3 -and $ata.CommandTimeouts -eq 2 -and $ata.UnsafeShutdowns -eq 210 -and $ata.PowerCycles -eq 1520 -and $ata.PowerOnHours -eq 41234 -and $ata.SmartPassed -eq $true) 'smartctl ATA attributes 5/12/187/188/192/197/198/199 are mapped'
+    $nvme=ConvertFrom-CMSmartctlJson ($nvmeJson | ConvertFrom-Json) '/dev/nvme0'
+    Assert-CM ($nvme.BusType -eq 'NVMe' -and $nvme.MediaErrors -eq 0 -and $nvme.ErrorLogEntries -eq 12 -and $nvme.UnsafeShutdowns -eq 45 -and $nvme.WearPct -eq 7 -and $nvme.AvailableSparePct -eq 100 -and $nvme.CriticalWarning -eq 0) 'smartctl NVMe health log is mapped'
+    $storageDisks=@([pscustomobject]@{DeviceId='2';FriendlyName='ST1000DM010-2EP102';SerialNumber='ZN10TCNW';BusType='SATA';MediaType='HDD';HealthStatus='Healthy'},[pscustomobject]@{DeviceId='3';FriendlyName='KINGSTON SNV2S500G';SerialNumber='0000_0000_0000_0000_0026_B728_3291_D3E5.';BusType='NVMe';MediaType='SSD';HealthStatus='Healthy'})
+    $global:CMTestCounters=@{ '2'=[pscustomobject]@{Temperature=33;ReadErrorsTotal=0;ReadErrorsUncorrected=0;ReadLatencyMax=120}; '3'=[pscustomobject]@{Temperature=38;TemperatureMax=77;Wear=0} }
+    $global:CMTestStorageDisks=$storageDisks
+    function global:Get-PhysicalDisk { [CmdletBinding()] param() $global:CMTestStorageDisks }
+    function global:Get-StorageReliabilityCounter { [CmdletBinding()] param([Parameter(ValueFromPipeline=$true)]$InputObject) process { $global:CMTestCounters[[string]$InputObject.DeviceId] } }
+    & $diagnostics { param($a,$n) $script:SavedSmartctlPath=${function:Get-CMSmartctlPath}; $script:SavedInvokeSmartctl=${function:Invoke-CMSmartctl}; $script:SmartFixture=@{a=$a;n=$n}; function script:Get-CMSmartctlPath { param($ToolsDir) $null } } $ataJson $nvmeJson
+    try {
+        $storageRoot=Join-Path $temp 'storage'
+        $first=@(Invoke-CMStorageHealthSnapshot -Root $storageRoot -ToolsDir $storageRoot -BootKey 'BOOT1')
+        $storageCsv=@(Import-Csv (Join-Path $storageRoot 'Evidence/Logs/storage-health.csv') -Delimiter ';')
+        Assert-CM ($first.Count -eq 0 -and $storageCsv.Count -eq 2 -and $storageCsv[0].Source -eq 'CIM' -and $storageCsv[0].ReadLatencyMaxMs -eq '120' -and $storageCsv[1].TemperatureMaxC -eq '77' -and $storageCsv[0].Utc) 'First storage snapshot writes one CSV row per disk from reliability counters'
+        $global:CMTestCounters['2'].ReadErrorsUncorrected=4
+        $global:CMTestStorageDisks[1].HealthStatus='Warning'
+        $second=@(Invoke-CMStorageHealthSnapshot -Root $storageRoot -ToolsDir $storageRoot -BootKey 'BOOT2')
+        $storageLog=@(Get-Content (Join-Path $storageRoot 'Evidence/Logs/events.log'))
+        Assert-CM ($second.Count -eq 2 -and ($second | Where-Object { $_.Counter -eq 'ReadErrorsUncorrected' -and $_.Before -eq 0 -and $_.After -eq 4 }) -and ($second | Where-Object { $_.Counter -eq 'Health' -and $_.After -eq 'Warning' }) -and @($storageLog | Where-Object { $_ -match '\[WARNING\] Storage health change: ST1000DM010-2EP102 \(ZN10TCNW\) ReadErrorsUncorrected 0 -> 4' }).Count -eq 1) 'Grown error counters and health changes are returned and logged once'
+        & $diagnostics { function script:Get-CMSmartctlPath { param($ToolsDir) 'smartctl-fixture' }; function script:Invoke-CMSmartctl { param($Path,$Arguments) if ($Arguments -like '--scan*') { '{"devices":[{"name":"/dev/sda","type":"sat"},{"name":"/dev/nvme0","type":"nvme"}]}' } elseif ($Arguments -like '*/dev/sda*') { $script:SmartFixture.a } else { $script:SmartFixture.n } } }
+        $merged=@(Get-CMStorageHealth $storageRoot)
+        Assert-CM ($merged.Count -eq 2 -and $merged[0].Source -eq 'CIM+smartctl' -and $merged[0].CrcErrors -eq 3 -and $merged[0].ReadLatencyMaxMs -eq 120 -and $merged[1].Source -eq 'CIM+smartctl' -and $merged[1].ErrorLogEntries -eq 12 -and $merged[1].TemperatureMaxC -eq 77) 'smartctl data merges into the matching disk by serial, or by model when NVMe serials differ'
+        $grown=@(Compare-CMStorageHealth @($merged) @(ConvertFrom-CMSmartctlJson (($ataJson -replace '"id":199,"raw":\{"value":3\}','"id":199,"raw":{"value":5}' -replace '"passed":true','"passed":false') | ConvertFrom-Json) '/dev/sda'))
+        Assert-CM ((@($grown | ForEach-Object Counter) -join ',') -eq 'CrcErrors,SmartPassed' -and $grown[0].Before -eq 3 -and $grown[0].After -eq 5) 'CRC error growth and a failed SMART status are reported'
+        Assert-CM ($null -ne $report.PSObject.Properties['StorageHealthChanges']) 'Incident report.json carries StorageHealthChanges'
+    } finally {
+        & $diagnostics { Set-Item Function:script:Get-CMSmartctlPath $script:SavedSmartctlPath; Set-Item Function:script:Invoke-CMSmartctl $script:SavedInvokeSmartctl; Remove-Variable SavedSmartctlPath,SavedInvokeSmartctl,SmartFixture -Scope Script }
+        Remove-Item Function:global:Get-PhysicalDisk,Function:global:Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
+        Remove-Variable CMTestCounters,CMTestStorageDisks -Scope Global -ErrorAction SilentlyContinue
+    }
+
     # Install.ps1 helpers: load only the function definitions via the AST; the installer itself never runs.
     $installAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Install.ps1'),[ref]$null,[ref]$null)
     $installFunctions=@($installAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] },$false))
