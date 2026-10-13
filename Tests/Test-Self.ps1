@@ -202,6 +202,10 @@ ST1000DM010-2EP102_Temperature_Temperature:32
             Assert-CM ($noSeagate.Hdd -eq 34) 'temperatures.csv records any HDD vendor when no ST1000 is present'
             Assert-CM ((@((Get-CMSensorAlerts $amd).Keys) -join ',') -eq 'Nuvoton_NCT6798D_Temperature_Temperature_3,Nuvoton_NCT6798D_Temperature_Temperature_6') 'Unwired Super I/O inputs alert until they are listed in IgnoredTemperatureSensors'
             Assert-CM (@((Get-CMSensorAlerts $amd @('*NCT6798D_Temperature_Temperature_3','*NCT6798D_Temperature_Temperature_6')).Keys).Count -eq 0) 'IgnoredTemperatureSensors silences only the listed inputs'
+            $watchAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Scripts/Watch-LiveSensors.ps1'),[ref]$null,[ref]$null)
+            . ([scriptblock]::Create(($watchAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CMFanSummary' },$false) | Select-Object -First 1).Extent.Text))
+            Assert-CM ((Get-CMFanSummary $intel.RawSummary) -eq 'Fan2 1321 RPM' -and (Get-CMFanSummary $amd.RawSummary) -eq 'Fan2 1221 RPM') 'Watch-LiveSensors shows spinning fans in RPM and skips PWM control percentages'
+            Assert-CM ((Get-CMFanSummary 'Chip_Fan_Fan_1:0|Chip_Control_Fan_1:60') -eq 'N/A' -and (Get-CMFanSummary '') -eq 'N/A') 'Watch-LiveSensors shows N/A when no fan is spinning'
 
             # Alerts reach telemetry.log once when they start and once when they clear, not on every sample.
             $alertRoot=Join-Path $temp 'alerts'

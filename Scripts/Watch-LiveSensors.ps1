@@ -4,6 +4,17 @@ param(
     [string]$RootPath = 'C:\CrashMonitor'
 )
 
+function Get-CMFanSummary {
+    # Fan sensors are "<chip>_Fan_Fan_N:<rpm>"; "<chip>_Control_Fan_N" is the PWM duty in %, not a speed.
+    param([string]$RawSummary)
+    $fans = foreach ($m in [regex]::Matches([string]$RawSummary, '_Fan_Fan_(\d+):(\d+(?:\.\d+)?)')) {
+        $rpm = [double]::Parse($m.Groups[2].Value, [Globalization.CultureInfo]::InvariantCulture)
+        if ($rpm -gt 0) { 'Fan{0} {1} RPM' -f $m.Groups[1].Value, [math]::Round($rpm, [MidpointRounding]::AwayFromZero) }
+    }
+    if ($fans) { return (@($fans) -join ', ') }
+    return 'N/A'
+}
+
 for ($i = 0; $i -lt $Samples; $i++) {
     $now = Get-Date
     $cpu = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
@@ -40,6 +51,7 @@ for ($i = 0; $i -lt $Samples; $i++) {
                     $hw = $rawJson | ConvertFrom-Json
                     if ($hw.Vcore) { $vcore = "$($hw.Vcore)V" }
                     if ($hw.CpuPower) { $cpuPower = "$($hw.CpuPower)" }
+                    if ($hw.RawSummary) { $fanRpm = Get-CMFanSummary $hw.RawSummary }
                     if ($hw.RawSummary -match 'Temperature_CPU_Package:(\d+(\.\d+)?)') { $cpuPkg = "$([math]::Round([double]$Matches[1]))C" }
                     elseif ($hw.CpuTemp -and $hw.Source -ne 'MSAcpi_ThermalZoneTemperature') { $cpuPkg = "$($hw.CpuTemp)C" }
                     elseif ($hw.ThermalZoneTemp) { $cpuPkg = "$($hw.ThermalZoneTemp)C (Zone)" }

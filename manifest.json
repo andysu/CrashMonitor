@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T08:27:45Z",
+    "GeneratedUtc":  "2026-10-13T08:33:34Z",
     "GitCommit":  null,
     "FileCount":  58,
     "Files":  [
@@ -127,13 +127,13 @@
                   },
                   {
                       "Path":  "Scripts/Watch-LiveSensors.ps1",
-                      "SizeBytes":  3068,
-                      "Sha256":  "574012b50ee54bc0f71ef3c21c1ceebbdcbc98097768be94d3897dc78c006acf"
+                      "SizeBytes":  3727,
+                      "Sha256":  "f70a3a1c90d2ba0218ce7d55ee934d015298ecf8e9ef7b6058e23ab2e150644d"
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  40286,
-                      "Sha256":  "376ce61a601769d283c5b7b8f20a4b161e8d78e61b5b0f1b40224a5bbf66b20b"
+                      "SizeBytes":  41068,
+                      "Sha256":  "e958129f325112c4269e5f811f12c5d17cf6057f7278a4e94fb3fc528db3b596"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",
