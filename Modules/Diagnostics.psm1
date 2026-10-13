@@ -157,7 +157,12 @@ function ConvertFrom-CMSmartctlJson {
         $ataMap=@{ 4='StartStopCycles'; 5='ReallocatedSectors'; 12='PowerCycles'; 187='ReportedUncorrect'; 188='CommandTimeouts'; 192='UnsafeShutdowns'; 193='LoadUnloadCycles'; 197='PendingSectors'; 198='OfflineUncorrectable'; 199='CrcErrors' }
         foreach ($attr in $Info.ata_smart_attributes.table) {
             $column=$ataMap[[int]$attr.id]
-            if ($column -and $attr.raw -and $null -ne $attr.raw.value) { $row[$column]=[double]$attr.raw.value }
+            if ($column -and $attr.raw -and $null -ne $attr.raw.value) {
+                $value=[double]$attr.raw.value
+                # Seagate packs attribute 188 as three 16-bit counters (raw "2 2 5" = 8590065669); the low word is the total.
+                if ($attr.id -eq 188 -and $value -gt 65535) { $value=[double]([uint64]$attr.raw.value -band 0xFFFF) }
+                $row[$column]=$value
+            }
         }
     }
     return $row

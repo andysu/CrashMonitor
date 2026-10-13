@@ -386,6 +386,15 @@ ST1000DM010-2EP102_Temperature_Temperature:32
     $nvmeJson='{"model_name":"KINGSTON SNV2S500G","serial_number":"50026B7283291D3E5","smart_status":{"passed":true},"temperature":{"current":38},"nvme_smart_health_information_log":{"critical_warning":0,"available_spare":100,"percentage_used":7,"power_cycles":900,"power_on_hours":5000,"unsafe_shutdowns":45,"media_errors":0,"num_err_log_entries":12}}'
     $ata=ConvertFrom-CMSmartctlJson ($ataJson | ConvertFrom-Json) '/dev/sda'
     Assert-CM ($ata.ReallocatedSectors -eq 0 -and $ata.PendingSectors -eq 8 -and $ata.OfflineUncorrectable -eq 8 -and $ata.CrcErrors -eq 3 -and $ata.CommandTimeouts -eq 2 -and $ata.UnsafeShutdowns -eq 210 -and $ata.PowerCycles -eq 1520 -and $ata.PowerOnHours -eq 41234 -and $ata.SmartPassed -eq $true) 'smartctl ATA attributes 5/12/187/188/192/197/198/199 are mapped'
+    $packedAta=ConvertFrom-CMSmartctlJson (($ataJson -replace '"id":188,"raw":\{"value":2\}','"id":188,"raw":{"value":8590065669}') | ConvertFrom-Json) '/dev/sda'
+    Assert-CM ($packedAta.CommandTimeouts -eq 5) 'Seagate packed attribute 188 (raw "2 2 5") is read as 5 command timeouts'
+    # The smartctl runner inside Get-CMSmartSnapshot: arguments must arrive and a large output must not block the process.
+    $commonAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Modules/Common.psm1'),[ref]$null,[ref]$null)
+    . ([scriptblock]::Create(($commonAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-ExecutableWithTimeout' },$true) | Select-Object -First 1).Extent.Text))
+    $cmdExe=Join-Path $env:SystemRoot 'System32/cmd.exe'
+    $echoed=Invoke-ExecutableWithTimeout -ExePath $cmdExe -Arguments '/c echo smartctl-args-ok' -TimeoutMs 10000
+    $bulk=Invoke-ExecutableWithTimeout -ExePath $cmdExe -Arguments '/c for /L %i in (1,1,3000) do @echo 0123456789012345678901234567890123' -TimeoutMs 10000
+    Assert-CM ($echoed -match 'smartctl-args-ok' -and $bulk.Length -gt 90000) 'Boot SMART runner passes arguments to smartctl and reads large output without blocking'
     $nvme=ConvertFrom-CMSmartctlJson ($nvmeJson | ConvertFrom-Json) '/dev/nvme0'
     Assert-CM ($nvme.BusType -eq 'NVMe' -and $nvme.MediaErrors -eq 0 -and $nvme.ErrorLogEntries -eq 12 -and $nvme.UnsafeShutdowns -eq 45 -and $nvme.WearPct -eq 7 -and $nvme.AvailableSparePct -eq 100 -and $nvme.CriticalWarning -eq 0) 'smartctl NVMe health log is mapped'
     $storageDisks=@([pscustomobject]@{DeviceId='2';FriendlyName='ST1000DM010-2EP102';SerialNumber='ZN10TCNW';BusType='SATA';MediaType='HDD';HealthStatus='Healthy'},[pscustomobject]@{DeviceId='3';FriendlyName='KINGSTON SNV2S500G';SerialNumber='0000_0000_0000_0000_0026_B728_3291_D3E5.';BusType='NVMe';MediaType='SSD';HealthStatus='Healthy'})

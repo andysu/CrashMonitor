@@ -1,7 +1,7 @@
 ﻿{
     "Package":  "CrashMonitor",
     "Version":  "2.0.0",
-    "GeneratedUtc":  "2026-10-13T10:04:08Z",
+    "GeneratedUtc":  "2026-10-13T10:10:18Z",
     "GitCommit":  null,
     "FileCount":  62,
     "Files":  [
@@ -37,13 +37,13 @@
                   },
                   {
                       "Path":  "Modules/Common.psm1",
-                      "SizeBytes":  27045,
-                      "Sha256":  "6df923b19b75bcbca115ba49d64aae667e33d0e2a2d8318f820148115914a1e9"
+                      "SizeBytes":  27398,
+                      "Sha256":  "03085694fde4527903cb64dbbb4f622bac890f44c4ec25a4b6d7af78d18e2ecd"
                   },
                   {
                       "Path":  "Modules/Diagnostics.psm1",
-                      "SizeBytes":  34904,
-                      "Sha256":  "dc738704cf7330432773818320edf0daf91d03b63f559926c2171ba060e55efd"
+                      "SizeBytes":  35211,
+                      "Sha256":  "543bd95aaf381914f06581c3a9864d66f891c25185c8f7bdfb8918b7c1d87deb"
                   },
                   {
                       "Path":  "Modules/EventCapture.psm1",
@@ -137,8 +137,8 @@
                   },
                   {
                       "Path":  "Tests/Test-Self.ps1",
-                      "SizeBytes":  59702,
-                      "Sha256":  "b400f9eb39c7b39d92b9e9932d6b95bded7b0862e0baeb62d03f5ebe590cb559"
+                      "SizeBytes":  60973,
+                      "Sha256":  "b58e41e147006567cfd8a3972eba3ebfbf8a38aa196f68106e8add8b7d8a31e8"
                   },
                   {
                       "Path":  "Tests/Test-Windows.ps1",

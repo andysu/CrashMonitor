@@ -343,10 +343,11 @@ function Get-CMSmartSnapshot {
         $cmd = Get-Command 'smartctl.exe' -ErrorAction SilentlyContinue
         if ($cmd) { $smartctlPath = $cmd.Source }
     }
-    function Invoke-ExecutableWithTimeout([string]$ExePath, [string]$Args, [int]$TimeoutMs = 3000) {
+    # Not "$Args": that name is PowerShell's automatic variable, so such a parameter is always empty and smartctl got no arguments.
+    function Invoke-ExecutableWithTimeout([string]$ExePath, [string]$Arguments, [int]$TimeoutMs = 15000) {
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $ExePath
-        $psi.Arguments = $Args
+        $psi.Arguments = $Arguments
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.UseShellExecute = $false
@@ -355,8 +356,10 @@ function Get-CMSmartSnapshot {
         if ($null -eq $proc) { return $null }
         $out = $null
         try {
+            # Read while the process runs: a full stdout pipe would otherwise block smartctl until the timeout.
+            $read = $proc.StandardOutput.ReadToEndAsync()
             if ($proc.WaitForExit($TimeoutMs)) {
-                $out = $proc.StandardOutput.ReadToEnd()
+                $out = $read.Result
             } else {
                 try { $proc.Kill() } catch { }
             }
@@ -366,12 +369,13 @@ function Get-CMSmartSnapshot {
 
     if (Test-Path -LiteralPath $smartctlPath) {
         try {
-            $rawJson = Invoke-ExecutableWithTimeout -ExePath $smartctlPath -Args '--scan-open -j' -TimeoutMs 3000
+            # --scan-open spins up idle HDDs, which can take several seconds.
+            $rawJson = Invoke-ExecutableWithTimeout -ExePath $smartctlPath -Arguments '--scan-open -j'
             $scanOut = if ($rawJson) { $rawJson | ConvertFrom-Json } else { $null }
             if ($scanOut -and $scanOut.devices) {
                 $snapshot.Source = 'smartctl'
                 foreach ($dev in $scanOut.devices) {
-                    $devJson = Invoke-ExecutableWithTimeout -ExePath $smartctlPath -Args "-a $($dev.name) -j" -TimeoutMs 3000
+                    $devJson = Invoke-ExecutableWithTimeout -ExePath $smartctlPath -Arguments "-a $($dev.name) -j"
                     $devInfo = if ($devJson) { $devJson | ConvertFrom-Json } else { $null }
                     if (-not $devInfo) { continue }
                     $diskData = [ordered]@{
